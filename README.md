@@ -1,25 +1,24 @@
-# Chat Nini — Next
+# چت‌نینی / Chat Nini
 
-Private development repository for the staged migration and stabilization of the Chat Nini project.
+پیام‌رسان وب فارسی (راست‌به‌چپ) با سوییچ انگلیسی. برای هاست اشتراکی cPanel ساخته شده: PHP و MySQL، بدون WebSocket و بدون Node روی سرور. تازه‌سازی گفتگو با AJAX هر چند ثانیه است، فایل‌ها تکه‌تکه آپلود می‌شوند و ورود با JWT است تا بعداً اندروید هم بتواند به همین API وصل شود.
 
-## Current status
+ریپازیتوری: [Lion0098/Chat-nini](https://github.com/Lion0098/Chat-nini)
 
-- [x] Create a private repository.
-- [x] Record the initial audit findings.
-- [ ] Transfer the source code from the supplied archive after a secret/configuration scan.
-- [ ] Install dependencies and run the complete build.
-- [ ] Fix failing tests in small, reviewable commits.
-- [ ] Validate the React/Vite app and the PHP/MySQL hosting variant separately.
+## نصب روی cPanel
 
-## Project layout expected from the supplied archive
+1. محتوای پوشه `hosting/` را در `public_html` بگذارید (فایل `index.html` باید در ریشهٔ سایت باشد).
+2. در cPanel یک دیتابیس MySQL بسازید.
+3. آدرس `install.php` را باز کنید، مشخصات دیتابیس را وارد کنید و جدول‌ها ساخته می‌شوند.
+4. بعد از نصب، `install.php` را حذف کنید.
+5. یک کرون روزانه (یا ساعتی) اضافه کنید: `php /home/USER/public_html/cron/tick.php`  
+   این کار وضعیت‌های ۲۴ساعته، موقعیت زندهٔ منقضی و آپلودهای نصفه را پاک می‌کند و یک پشتیبان SQL روزانه در `storage/backups` می‌نویسد.
 
-- Root: React, TypeScript, Vite application and test scripts.
-- `hosting/`: separate PHP/MySQL hosting implementation.
+فایل‌ها بیرون از دسترس وب، داخل `storage/uploads` هستند و فقط با توکن از `/api/files/...` خوانده می‌شوند. `storage/.htaccess` دسترسی مستقیم را می‌بندد.
 
-These implementations will be checked separately before deployment; they should not be assumed to share the same runtime or configuration.
+اگر `sms_url` در `config.php` پر باشد، کد بازیابی رمز و کد ورود دومرحله‌ای علاوه بر ایمیل به شماره موبایل هم می‌رود. بدون آن، پیامک فقط در `storage/sms.log` می‌ماند تا درگاه را وصل کنید.
 
-## Development notes
+## چه چیزهایی عمداً این‌جا نیست
 
-The initial archive passed ZIP integrity validation. PHP syntax checks passed for all seven PHP files inspected. The JavaScript test suite reported 184 passing and 13 failing tests; full dependency installation and the production build were blocked in the audit environment by package-registry access.
-
-See [docs/INITIAL_AUDIT.md](docs/INITIAL_AUDIT.md) for details. No production credentials or deployment secrets belong in this repository.
+- تماس صوتی/تصویری: روی هاست اشتراکی TURN پایدار نداریم.
+- پیامک برای بازیابی یا 2FA: نیاز به درگاه دارد. کد دو مرحله‌ای و بازیابی رمز با ایمیل است (روی سرور اگر `mail()` تنظیم باشد).
+- Web Push فقط وقتی کار می‌کند که مرورگر اجازه بدهد و سرویس‌ورکر ثبت شده باشد. داخل برنامه، صدا و ویبره جداگانه هستند.
