@@ -1,27 +1,19 @@
-# Dependencies and build output
-node_modules/
-dist/
-build/
-.output/
-.vercel/
-coverage/
-
-# Environment and secrets
+node_modules
+dist
+.output
+.vinxi
+.tanstack
+.nitro
+.vercel
+*.log
 .env
 .env.*
-!.env.example
-hosting/config.php
+.DS_Store
+screenshots
+coverage
+.grok/og-pending
+.grok/favicon-preview.html
+.tools/
 hosting/storage/*
 !hosting/storage/.htaccess
-
-# Logs and temporary files
-*.log
-npm-debug.log*
-yarn-debug.log*
-pnpm-debug.log*
-.DS_Store
-Thumbs.db
-
-# Editor files
-.vscode/
-.idea/
+hosting/config.php
