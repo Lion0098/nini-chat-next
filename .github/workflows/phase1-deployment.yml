@@ -1,0 +1,29 @@
+name: Phase 1 Ubuntu deployment build
+
+on:
+  push:
+    branches:
+      - phase1/ubuntu-deployment
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  production-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build production bundle
+        run: npm run build
+      - name: Build production Docker image
+        run: docker build --tag nini-chat:phase1 .
