@@ -1,9 +1,10 @@
 # Phase 1 — Ubuntu Deployment Foundation Report
 
-**Status:** Deployment scaffolding implemented. Clean install, production build, and Docker image build have passed on GitHub Actions; runtime integration checks are now being added.  
-**Branch:** `phase1/ubuntu-deployment`  
-**Lockfile repair commit:** `0d338224fe3ba492b8ef150c14e427e9c3e9ef35`  
-**Validation workflow:** [Phase 1 Ubuntu deployment build](https://github.com/Lion0098/nini-chat-next/actions/workflows/phase1-deployment.yml)
+**Status: COMPLETE — automated build and Docker Compose runtime smoke tests passed.**  
+**Branch:** `phase1/ubuntu-deployment` (not merged to `main`)  
+**Latest validated commit:** `8e1b0b5e6671ae144371c250409a8eacc7575eee`  
+**Successful runtime workflow:** [Run 39868289923](https://github.com/Lion0098/nini-chat-next/actions/runs/39868289923)  
+**Deployment guide:** [`docs/UBUNTU_DEPLOYMENT.md`](UBUNTU_DEPLOYMENT.md)
 
 ## Changes made
 
@@ -16,33 +17,34 @@
 - Added a multi-stage Node 22 Dockerfile, Docker Compose with PostgreSQL 16 and a persistent named volume, `.env.example`, `.dockerignore`, and an Nginx TLS reverse-proxy example.
 - Added `docs/UBUNTU_DEPLOYMENT.md` with configuration, start, health-check, operational, backup, and restore guidance.
 - Repaired and committed the npm lockfile mismatch discovered by the first CI run.
-- Added GitHub Actions validation for clean install, production build, Docker Compose configuration, image build, and runtime checks.
+- Added a GitHub Actions workflow that tests a clean install, production build, Compose configuration, Docker image build, app startup, database connectivity, database persistence across a container restart, and app recovery/restart.
 
-## Confirmed validation
+## Validation evidence
 
-The successful workflow run [39867452546](https://github.com/Lion0098/nini-chat-next/actions/runs/39867452546) passed all of these steps:
+The latest run [39868289923](https://github.com/Lion0098/nini-chat-next/actions/runs/39868289923) completed successfully. All critical steps passed:
 
-- `npm ci` — clean locked dependency installation.
-- `npm run build` — production bundle generation.
-- `docker build --tag nini-chat:phase1 .` — production image build.
+1. `npm ci` — clean locked dependency installation.
+2. `npm run build` — production bundle generated.
+3. `docker compose config --quiet` — deployment configuration validated.
+4. `docker compose build app` — production image built successfully.
+5. PostgreSQL and application started successfully through Compose.
+6. `/api/health` returned success after app startup.
+7. A test row remained present after the PostgreSQL container was restarted.
+8. App health recovered after database restart.
+9. App health recovered after application restart.
+10. Disposable test containers and their test volume were cleaned up.
 
-The first workflow run failed before compilation due to the stale npm lockfile. The lockfile was regenerated and committed by GitHub Actions on this branch; the subsequent clean install/build/image build all passed.
+The initial CI run revealed a stale npm lockfile; it was repaired on this isolated branch. A subsequent runtime-test attempt found an ordering issue in the test workflow (Compose was validated before a disposable `.env` existed); the workflow was corrected and the latest complete run passed. These were resolved during Phase 1.
 
-## Runtime validation now being added
+## Boundaries and remaining production work
 
-The first runtime-workflow attempt correctly passed `npm ci` and the production build, then exposed a test-harness ordering issue: Compose configuration was validated before the disposable CI `.env` was created. This was a workflow-ordering issue, not an application failure. The workflow has been corrected to create throwaway test secrets before Compose validation; the full runtime check must be rerun. It then starts the application and PostgreSQL via Docker Compose, waits for `/api/health`, checks that a PostgreSQL probe row survives a database container restart, and verifies application health after database and app restarts. These checks must complete successfully before we treat the runtime portion as validated.
-
-## Scope and remaining limits
-
+- This proves the automated Docker build and basic runtime/persistence smoke tests work on a hosted Ubuntu runner. It does **not** mean the application is deployed to your actual VPS.
 - No VPS, firewall, DNS, domain, TLS certificate, or production service was changed.
-- The CI test uses disposable data and test-only random secrets. No production secrets are stored in Git.
-- A CI persistence check is not a full backup-and-restore drill; that still needs to be performed before production release.
-- Email/password flows, SMS.ir integration, app functionality, and the planned admin panel are later phases, not part of this deployment foundation.
-- The branch is intentionally not merged into `main` pending final validation and user approval.
+- CI uses disposable test-only secrets and test data; no production credentials were added to Git.
+- A full backup-and-restore drill on a separate test database is still required before production release.
+- Email/password registration, optional email verification, SMS.ir OTP, username uniqueness, admin management, groups/channels, and messaging behavior are later phases, not implemented by this deployment foundation.
+- The repository's previously identified baseline test failures are not represented as fixed by this deployment work; they must be addressed in the relevant later phases.
 
-## Acceptance checkpoint
+## Phase 1 acceptance
 
-1. Confirm the latest workflow passes the clean install, production build, image build, startup/health, database restart persistence, and application restart steps.
-2. Review `docs/UBUNTU_DEPLOYMENT.md` and confirm VPS details before any real deployment.
-3. Before production release, perform a protected backup-and-restore test and configure real DNS/TLS and firewall rules.
-4. Move to Phase 2 only after the user explicitly approves Phase 1.
+The deployment scaffold, clean install, production build, image build, startup/health check, and database/app restart smoke tests are complete and passing. Phase 1 is ready for user review. The next phase must not begin and this branch must not be merged to `main` until the user explicitly approves the Phase 1 result.
