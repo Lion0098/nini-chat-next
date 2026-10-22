@@ -1,10 +1,11 @@
-name: Phase 1 Ubuntu deployment build
+name: Ubuntu deployment and phased auth checks
 
 on:
   push:
     branches:
       - phase1/ubuntu-deployment
       - phase2/data-model
+      - phase3/auth-lifecycle
   workflow_dispatch:
 
 permissions:
@@ -24,8 +25,10 @@ jobs:
           cache: npm
       - name: Verify clean dependency install
         run: npm ci
-      - name: Verify migration and data-model contracts
-        run: node --test scripts/migration-plan.test.mjs scripts/data-model.test.mjs
+      - name: Verify migration, data-model, and auth lifecycle contracts
+        run: |
+          node --test scripts/migration-plan.test.mjs scripts/data-model.test.mjs scripts/auth-lifecycle.test.mjs
+          node --experimental-strip-types --test src/lib/sms/sms-ir.test.ts
       - name: Build production bundle
         run: npm run build
       - name: Create disposable CI environment
@@ -95,6 +98,35 @@ jobs:
           INSERT INTO audit_events (id, actor_id, action, target_type, target_id, metadata)
           VALUES ('phase2-audit-probe', 'phase2_user_a', 'phase2.schema.smoke', 'chat', 'phase2-chat-a', '{"source":"ci"}'::jsonb);
           SELECT 1 / CASE WHEN EXISTS (SELECT 1 FROM audit_events WHERE id = 'phase2-audit-probe' AND metadata->>'source' = 'ci') THEN 1 ELSE 0 END;
+          SQL
+      - name: Verify auth lifecycle schema and username uniqueness
+        run: |
+          docker compose exec -T db psql -v ON_ERROR_STOP=1 -U nini_chat -d nini_chat <<'SQL'
+          INSERT INTO "user" (id, name, email, "emailVerified", username, "phoneNumber", "phoneNumberVerified", "createdAt", "updatedAt") VALUES
+            ('phase3_user_a', 'Phase 3 A', 'phase3-a@example.invalid', false, 'phase3_unique_a', '+989111111111', true, now(), now()),
+            ('phase3_user_b', 'Phase 3 B', 'phase3-b@example.invalid', false, 'phase3_unique_b', '+989222222222', true, now(), now());
+          DO $$ BEGIN
+            BEGIN
+              INSERT INTO "user" (id, name, email, "emailVerified", username, "phoneNumber", "phoneNumberVerified", "createdAt", "updatedAt")
+              VALUES ('phase3_duplicate_username', 'Duplicate Username', 'phase3-c@example.invalid', false, 'PHASE3_UNIQUE_A', '+989333333333', true, now(), now());
+              RAISE EXCEPTION 'case-insensitive username uniqueness failed';
+            EXCEPTION WHEN unique_violation THEN NULL;
+            END;
+            BEGIN
+              INSERT INTO "user" (id, name, email, "emailVerified", username, "phoneNumber", "phoneNumberVerified", "createdAt", "updatedAt")
+              VALUES ('phase3_duplicate_phone', 'Duplicate Phone', 'phase3-d@example.invalid', false, 'phase3_unique_d', '+989111111111', true, now(), now());
+              RAISE EXCEPTION 'phone number uniqueness failed';
+            EXCEPTION WHEN unique_violation THEN NULL;
+            END;
+            IF (SELECT count(*) FROM "user" WHERE id IN ('phase3_user_a', 'phase3_user_b')) <> 2 THEN
+              RAISE EXCEPTION 'phase 3 user insert failed';
+            END IF;
+          END $$;
+          DELETE FROM "user" WHERE id IN ('phase3_user_a', 'phase3_user_b', 'phase3_duplicate_username', 'phase3_duplicate_phone');
+          SELECT 1 / CASE WHEN EXISTS (SELECT 1 FROM system_settings WHERE key = 'allow_email_signup' AND value = 'true')
+                            AND EXISTS (SELECT 1 FROM system_settings WHERE key = 'allow_phone_signup' AND value = 'true')
+                            AND to_regclass('public.phone_otp_challenges') IS NOT NULL
+                          THEN 1 ELSE 0 END;
           SQL
       - name: Verify PostgreSQL data survives container restart
         run: |

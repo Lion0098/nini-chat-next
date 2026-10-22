@@ -7,6 +7,7 @@ import { RedirectToSignIn } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { usePrefs } from "@/lib/prefs";
 import { getPublicConfig } from "@/server/api";
+import { normalizeIranPhone } from "@/lib/phone";
 
 export const Route = createFileRoute("/login")({ component: LoginPage });
 
@@ -16,6 +17,10 @@ function LoginPage() {
   const { t, locale, setLocale } = usePrefs();
   const cfg = useQuery({ queryKey: ["public-config"], queryFn: () => getPublicConfig() });
   const [mode, setMode] = useState<"login" | "signup">("login");
+  const [method, setMethod] = useState<"email" | "phone">("email");
+  const [phone, setPhone] = useState("");
+  const [otp, setOtp] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
   const [name, setName] = useState("");
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
@@ -31,36 +36,84 @@ function LoginPage() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (mode === "signup") {
-      if (cfg.data && !cfg.data.allowSignups) {
-        toast.error(t("signupsClosed"));
-        return;
-      }
-      if (password.length < 8) {
-        toast.error(t("passwordShort"));
-        return;
-      }
-      if (password !== confirm) {
-        toast.error(t("passwordMismatch"));
-        return;
-      }
-      if (!/^[a-zA-Z0-9._]{3,24}$/.test(username)) {
-        toast.error(t("errUsernameBad"));
-        return;
-      }
-    }
     setBusy(true);
     try {
+      if (method === "phone") {
+        const normalizedPhone = normalizeIranPhone(phone);
+        if (!normalizedPhone) {
+          toast.error(locale === "fa" ? "شماره موبایل معتبر ایران وارد کن." : "Enter a valid Iranian mobile number.");
+          return;
+        }
+        if (!/^[a-zA-Z0-9._]{3,24}$/.test(username.trim())) {
+          toast.error(t("errUsernameBad"));
+          return;
+        }
+        if (!otpSent) {
+          const res = await authClient.phoneNumber.sendOtp({ phoneNumber: normalizedPhone });
+          if (res.error) {
+            toast.error(res.error.message || (locale === "fa" ? "ارسال کد ممکن نشد؛ تنظیمات پیامک را بررسی کن." : "Could not send the code. Check SMS configuration."));
+            return;
+          }
+          setOtpSent(true);
+          toast.success(locale === "fa" ? "اگر ارسال پیامک موفق باشد، کد برایت ارسال می‌شود." : "If SMS delivery succeeds, the code will arrive shortly.");
+          return;
+        }
+        if (!/^\d{6}$/.test(otp.trim())) {
+          toast.error(locale === "fa" ? "کد ۶ رقمی را وارد کن." : "Enter the 6-digit code.");
+          return;
+        }
+        const phoneVerifyBody = {
+          phoneNumber: normalizedPhone,
+          code: otp.trim(),
+          username: username.trim().toLowerCase(),
+        };
+        const res = await authClient.phoneNumber.verify(phoneVerifyBody as never);
+        if (res.error) {
+          toast.error(res.error.message || t("authFailed"));
+          return;
+        }
+        await navigate({ to: "/" });
+        return;
+      }
+
       if (mode === "signup") {
-        const res = await authClient.signUp.email({ email, password, name: name || username });
+        if (cfg.data && (!cfg.data.allowSignups || cfg.data.allowEmailSignup === false)) {
+          toast.error(t("signupsClosed"));
+          return;
+        }
+        if (password.length < 8) {
+          toast.error(t("passwordShort"));
+          return;
+        }
+        if (password !== confirm) {
+          toast.error(t("passwordMismatch"));
+          return;
+        }
+        if (!/^[a-zA-Z0-9._]{3,24}$/.test(username.trim())) {
+          toast.error(t("errUsernameBad"));
+          return;
+        }
+      }
+      if (mode === "signup") {
+        const emailSignupBody = {
+          email: email.trim().toLowerCase(),
+          password,
+          name: name || username,
+          username: username.trim().toLowerCase(),
+        };
+        const res = await authClient.signUp.email(emailSignupBody as never);
         if (res.error) {
           toast.error(res.error.message || t("authFailed"));
           return;
         }
         const { saveProfile } = await import("@/server/api");
-        await saveProfile({ data: { username, displayName: name || username, locale } });
+        const profile = await saveProfile({ data: { username: username.trim().toLowerCase(), displayName: name || username, locale } });
+        if (!profile.ok) {
+          toast.error(t("authFailed"));
+          return;
+        }
       } else {
-        const res = await authClient.signIn.email({ email, password });
+        const res = await authClient.signIn.email({ email: email.trim().toLowerCase(), password });
         if (res.error) {
           toast.error(res.error.message || t("authFailed"));
           return;
@@ -101,43 +154,71 @@ function LoginPage() {
           {cfg.data?.maintenance ? (
             <p className="mb-3 rounded-lg bg-header px-3 py-2 text-sm">{cfg.data.maintenance}</p>
           ) : null}
-          <div className="mb-4 grid grid-cols-2 rounded-full bg-header p-1 text-sm">
-            <button type="button" onClick={() => setMode("login")} className={`h-10 rounded-full ${mode === "login" ? "bg-panel font-medium shadow" : ""}`}>
-              {t("login")}
+          <div className="mb-3 grid grid-cols-2 rounded-full bg-header p-1 text-sm">
+            <button type="button" onClick={() => { setMethod("email"); setOtpSent(false); setOtp(""); }} className={`h-10 rounded-full ${method === "email" ? "bg-panel font-medium shadow" : ""}`}>
+              {locale === "fa" ? "ایمیل و رمز" : "Email & password"}
             </button>
-            <button type="button" onClick={() => setMode("signup")} className={`h-10 rounded-full ${mode === "signup" ? "bg-panel font-medium shadow" : ""}`}>
-              {t("signup")}
+            <button type="button" onClick={() => { setMethod("phone"); setOtpSent(false); setOtp(""); }} className={`h-10 rounded-full ${method === "phone" ? "bg-panel font-medium shadow" : ""}`}>
+              {locale === "fa" ? "ورود با پیامک" : "Phone & SMS"}
             </button>
           </div>
-          <form onSubmit={(e) => void submit(e)} className="space-y-3">
-            {mode === "signup" ? (
-              <>
-                <Lab label={t("name")} value={name} onChange={setName} autoComplete="name" />
-                <Lab label={t("username")} value={username} onChange={setUsername} autoComplete="username" />
-              </>
-            ) : null}
-            <Lab label={t("email")} value={email} onChange={setEmail} type="email" autoComplete="email" />
-            <Lab label={t("password")} value={password} onChange={setPassword} type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} />
-            {mode === "signup" ? (
-              <Lab label={t("confirmPassword")} value={confirm} onChange={setConfirm} type="password" autoComplete="new-password" />
-            ) : null}
-            <button disabled={busy} className="h-11 w-full rounded-full bg-green font-medium text-on disabled:opacity-60">
-              {mode === "signup" ? t("signup") : t("login")}
-            </button>
-          </form>
-          <div className="my-4 text-center text-xs text-muted">{t("or")}</div>
-          <div className="space-y-2">
-            {GROK_PROVIDERS.map((p) => (
-              <button
-                key={p.providerId}
-                type="button"
-                onClick={() => signIn(p.providerId, { callbackURL: "/" })}
-                className="h-11 w-full rounded-full bg-header text-sm font-medium"
-              >
-                {p.providerId === "grok-google" ? t("continueGoogle") : t("continueX")}
+          {method === "email" ? (
+            <div className="mb-4 grid grid-cols-2 rounded-full bg-header p-1 text-sm">
+              <button type="button" onClick={() => setMode("login")} className={`h-10 rounded-full ${mode === "login" ? "bg-panel font-medium shadow" : ""}`}>
+                {t("login")}
               </button>
-            ))}
-          </div>
+              <button type="button" onClick={() => setMode("signup")} className={`h-10 rounded-full ${mode === "signup" ? "bg-panel font-medium shadow" : ""}`}>
+                {t("signup")}
+              </button>
+            </div>
+          ) : <p className="mb-4 text-sm text-muted">{locale === "fa" ? "با کد یک‌بارمصرف وارد شو یا حساب جدید بساز؛ برای حساب جدید نام کاربری یکتا لازم است." : "Use a one-time code to sign in or create an account. New accounts need a unique username."}</p>}
+          <form onSubmit={(e) => void submit(e)} className="space-y-3">
+            {method === "phone" ? (
+              <>
+                <Lab label={t("username")} value={username} onChange={setUsername} autoComplete="username" />
+                <Lab label={locale === "fa" ? "شماره موبایل ایران" : "Iranian mobile number"} value={phone} onChange={setPhone} type="tel" autoComplete="tel" />
+                {otpSent ? <Lab label={locale === "fa" ? "کد پیامک‌شده" : "SMS code"} value={otp} onChange={setOtp} type="text" autoComplete="one-time-code" /> : null}
+                <button disabled={busy} className="h-11 w-full rounded-full bg-green font-medium text-on disabled:opacity-60">
+                  {busy ? (locale === "fa" ? "لطفاً صبر کن…" : "Please wait…") : otpSent ? (locale === "fa" ? "تأیید کد و ورود" : "Verify code & sign in") : (locale === "fa" ? "ارسال کد پیامکی" : "Send SMS code")}
+                </button>
+                {otpSent ? <button type="button" disabled={busy} onClick={() => { setOtpSent(false); setOtp(""); }} className="w-full py-1 text-sm text-muted">{locale === "fa" ? "تغییر شماره / ارسال دوباره" : "Change number / request another code"}</button> : null}
+              </>
+            ) : (
+              <>
+                {mode === "signup" ? (
+                  <>
+                    <Lab label={t("name")} value={name} onChange={setName} autoComplete="name" />
+                    <Lab label={t("username")} value={username} onChange={setUsername} autoComplete="username" />
+                  </>
+                ) : null}
+                <Lab label={t("email")} value={email} onChange={setEmail} type="email" autoComplete="email" />
+                <Lab label={t("password")} value={password} onChange={setPassword} type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} />
+                {mode === "signup" ? (
+                  <Lab label={t("confirmPassword")} value={confirm} onChange={setConfirm} type="password" autoComplete="new-password" />
+                ) : null}
+                <button disabled={busy} className="h-11 w-full rounded-full bg-green font-medium text-on disabled:opacity-60">
+                  {mode === "signup" ? t("signup") : t("login")}
+                </button>
+              </>
+            )}
+          </form>
+          {method === "email" ? (
+            <>
+              <div className="my-4 text-center text-xs text-muted">{t("or")}</div>
+              <div className="space-y-2">
+                {GROK_PROVIDERS.map((p) => (
+                  <button
+                    key={p.providerId}
+                    type="button"
+                    onClick={() => signIn(p.providerId, { callbackURL: "/" })}
+                    className="h-11 w-full rounded-full bg-header text-sm font-medium"
+                  >
+                    {p.providerId === "grok-google" ? t("continueGoogle") : t("continueX")}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : null}
         </div>
       </section>
     </main>

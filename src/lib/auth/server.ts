@@ -30,14 +30,17 @@
  * a verified id via `@/lib/auth/middleware`.
  */
 import { betterAuth } from "better-auth";
-import { bearer, genericOAuth } from "better-auth/plugins";
+import { bearer, genericOAuth, phoneNumber } from "better-auth/plugins";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 import { getCookie } from "@tanstack/react-start/server";
 import { randomBytes } from "node:crypto";
 import { Pool } from "pg";
-import { ensureDbReady, getPglite } from "../db";
+import { ensureDbReady, getPglite, getSql } from "../db";
+import { sendVerificationEmail as deliverVerificationEmail } from "../email/resend";
+import { assertSmsIrConfigured } from "../sms/sms-ir";
+import { assertPhoneOtpConfigured, sendPhoneOtp, verifyPhoneOtp } from "./phone-otp.server";
 import { emailAndPasswordEnabled } from "./email-password";
-import { GATE_PROVIDER_ID, gateIdentitySessions } from "./gate-session.server";
+import { gateIdentitySessions } from "./gate-session.server";
 import { GROK_PROVIDERS } from "./providers";
 import { pgliteDialect } from "./pglite-dialect";
 import {
@@ -82,9 +85,9 @@ const isProduction = process.env.NODE_ENV === "production";
 const grokClientId = env("GROK_AUTH_CLIENT_ID") ?? (isProduction ? undefined : PREVIEW_CLIENT_ID);
 const grokClientSecret = env("GROK_AUTH_CLIENT_SECRET") ?? (isProduction ? undefined : PREVIEW_CLIENT_SECRET);
 
-/** True when federated sign-in is active (real auth is enforced). */
+/** True when local credentials or federated sign-in are active (real auth is enforced). */
 export const authConfigured =
-  !authDisabled && Boolean(grokClientId && grokClientSecret);
+  !authDisabled && (emailAndPasswordEnabled || Boolean(grokClientId && grokClientSecret));
 
 // This app's own Better Auth origin. When deployed the deployer injects the
 // public URL. In the sandbox live preview there's no fixed URL (each preview gets
@@ -185,24 +188,46 @@ export const auth = betterAuth({
   // local loopback variants, or clients get "Invalid origin".
   trustedOrigins,
 
-  // Encrypt broker-issued OAuth tokens at rest, and treat the broker's upstreams
-  // as trusted first-party identities. The broker owns identity and X emails are
-  // synthetic/unverified, so WITHOUT this a login can fail with
-  // `account_not_linked` (Better Auth refuses to attach an untrusted, unverified
-  // identity to an existing user). Google and X carry DISTINCT emails, so this
-  // never merges them into one user — they stay separate identities.
+  // Messenger username is an auth-level field as well as a profile field. This
+  // lets the database reject duplicate usernames before a session is issued.
+  user: {
+    additionalFields: {
+      username: { type: "string", required: false, input: true },
+    },
+  },
+
+  // Verification is deliberately optional by default. Users can use the app
+  // before verification and request a link from Settings; delivery requires the
+  // server-side Resend-compatible environment variables documented in .env.example.
+  emailVerification: {
+    sendOnSignUp: false,
+    autoSignInAfterVerification: true,
+    expiresIn: 60 * 60,
+    sendVerificationEmail: async ({ user, url }) => {
+      await deliverVerificationEmail(user.email, url);
+    },
+  },
+
+  // Defense-in-depth rate limits for credential and OTP endpoints.
+  rateLimit: {
+    enabled: true,
+    window: 60,
+    max: 100,
+    customRules: {
+      "/sign-up/email": { window: 60, max: 5 },
+      "/sign-in/email": { window: 60, max: 10 },
+      "/send-verification-email": { window: 60, max: 3 },
+      "/phone-number/send-otp": { window: 60, max: 2 },
+      "/phone-number/verify": { window: 60, max: 8 },
+    },
+  },
+
+  // Encrypt broker-issued OAuth tokens at rest. Automatic account linking is
+  // intentionally disabled: a future linking flow must require an authenticated
+  // session and proof of control of both identities before enabling this capability.
   account: {
     encryptOAuthTokens: true,
-    accountLinking: {
-      enabled: true,
-      trustedProviders: [
-        ...GROK_PROVIDERS.map((p) => p.providerId),
-        GATE_PROVIDER_ID,
-      ],
-      // X's synthetic email is never "verified", so don't gate linking on the
-      // local user's email-verified state.
-      requireLocalEmailVerified: false,
-    },
+    accountLinking: { enabled: false },
   },
 
   // Cache the session in the short-lived signed `session_data` cookie so reads
@@ -212,7 +237,9 @@ export const auth = betterAuth({
   session: { cookieCache: { enabled: true, maxAge: 300 } },
 
   // Local email/password — toggled only via `./email-password` (not a plugin).
-  ...(emailAndPasswordEnabled ? { emailAndPassword: { enabled: true } } : {}),
+  ...(!authDisabled && emailAndPasswordEnabled
+    ? { emailAndPassword: { enabled: true, requireEmailVerification: false, minPasswordLength: 8 } }
+    : {}),
 
   // `__Host-` prefixed cookies: the browser REFUSES any same-named cookie that
   // carries a `Domain` attribute, so a sibling `*.grok.me` app cannot "toss" a
@@ -234,6 +261,43 @@ export const auth = betterAuth({
 
   plugins: [
     gateIdentitySessions(),
+
+    phoneNumber({
+      otpLength: 6,
+      expiresIn: 5 * 60,
+      allowedAttempts: 3,
+      requireVerification: true,
+      phoneNumberValidator: (value) => /^\+989\d{9}$/.test(value),
+      sendOTP: ({ phoneNumber: number, code }) => {
+        // Better Auth recommends not awaiting delivery in the endpoint response.
+        // Validate config synchronously so a missing sandbox key is visible; the
+        // asynchronous delivery failure is logged without phone numbers or OTPs.
+        assertSmsIrConfigured();
+        assertPhoneOtpConfigured();
+        void sendPhoneOtp(number, code).catch(() => {
+          console.error("[sms-ir] OTP delivery failed; inspect SMS.ir sandbox/configuration.");
+        });
+      },
+      verifyOTP: async ({ phoneNumber: number, code }) => verifyPhoneOtp(number, code),
+      signUpOnVerification: {
+        getTempEmail: (number) => `phone-${number.replace(/\D/g, "")}@phone.nini.invalid`,
+        getTempName: (number) => number,
+      },
+      callbackOnVerification: async ({ phoneNumber: number, user }) => {
+        const sql = await getSql();
+        const authUser = user as typeof user & { username?: unknown };
+        const username = typeof authUser.username === "string" ? authUser.username.trim().toLowerCase() : null;
+        const displayName = username || user.name || number;
+        await sql`
+          insert into profiles (user_id, username, display_name, phone, role, last_seen_at)
+          values (${user.id}, ${username}, ${displayName}, ${number}, 'user', now())
+          on conflict (user_id) do update set
+            phone = excluded.phone,
+            username = coalesce(profiles.username, excluded.username),
+            updated_at = now()
+        `;
+      },
+    }),
 
     // One genericOAuth provider per upstream (when auth is on), all federating
     // to the broker with the SAME client and differing only by the `idp` hint.

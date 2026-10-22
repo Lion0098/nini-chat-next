@@ -272,11 +272,13 @@ function SettingsForm({
   initial,
   onSave,
 }: {
-  initial: { allowSignups: boolean; maxUploadBytes: number; maintenance: string };
-  onSave: (v: { allowSignups: boolean; maxUploadBytes: number; maintenance: string }) => Promise<void>;
+  initial: { allowSignups: boolean; allowEmailSignup: boolean; allowPhoneSignup: boolean; maxUploadBytes: number; maintenance: string };
+  onSave: (v: { allowSignups: boolean; allowEmailSignup: boolean; allowPhoneSignup: boolean; maxUploadBytes: number; maintenance: string }) => Promise<void>;
 }) {
-  const { t } = usePrefs();
+  const { t, locale } = usePrefs();
   const [allowSignups, setAllow] = useState(initial.allowSignups);
+  const [allowEmailSignup, setAllowEmail] = useState(initial.allowEmailSignup);
+  const [allowPhoneSignup, setAllowPhone] = useState(initial.allowPhoneSignup);
   const [maxUploadBytes, setMax] = useState(String(initial.maxUploadBytes));
   const [maintenance, setNote] = useState(initial.maintenance);
   return (
@@ -284,13 +286,22 @@ function SettingsForm({
       className="max-w-lg space-y-3 rounded-xl bg-panel p-4"
       onSubmit={(e) => {
         e.preventDefault();
-        void onSave({ allowSignups, maxUploadBytes: Number(maxUploadBytes), maintenance });
+        void onSave({ allowSignups, allowEmailSignup, allowPhoneSignup, maxUploadBytes: Number(maxUploadBytes), maintenance });
       }}
     >
       <label className="flex items-center justify-between">
         <span>{t("allowSignups")}</span>
         <input type="checkbox" checked={allowSignups} onChange={(e) => setAllow(e.target.checked)} className="size-5" />
       </label>
+      <label className="flex items-center justify-between gap-3">
+        <span>{locale === "fa" ? "ثبت‌نام با ایمیل و رمز عبور" : "Email/password registration"}</span>
+        <input type="checkbox" checked={allowEmailSignup} onChange={(e) => setAllowEmail(e.target.checked)} className="size-5" />
+      </label>
+      <label className="flex items-center justify-between gap-3">
+        <span>{locale === "fa" ? "ثبت‌نام با شماره موبایل و پیامک" : "Phone/SMS registration"}</span>
+        <input type="checkbox" checked={allowPhoneSignup} onChange={(e) => setAllowPhone(e.target.checked)} className="size-5" />
+      </label>
+      <p className="text-xs leading-relaxed text-muted">{locale === "fa" ? "این گزینه‌ها ثبت‌نام جدید هر روش را کنترل می‌کنند؛ ورود کاربران موجود همچنان مجاز است." : "These switches control new registrations. Existing users can still sign in."}</p>
       <label className="block text-sm">
         <span className="text-muted">{t("maxUpload")}</span>
         <input value={maxUploadBytes} onChange={(e) => setMax(e.target.value)} className="mt-1 h-11 w-full rounded-lg bg-header px-3" />

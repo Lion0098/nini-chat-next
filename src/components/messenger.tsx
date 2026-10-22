@@ -20,7 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { RedirectToSignIn, UserButton } from "@/lib/auth/gates";
-import { signOut } from "@/lib/auth/client";
+import { authClient, signOut } from "@/lib/auth/client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import type { ChatListItem, ChatMessage, Me, PublicUser, Thread } from "@/lib/chat-types";
 import { EMOJIS, downloadBase64, fileToBase64, resizeImage } from "@/lib/files";
@@ -958,6 +958,9 @@ function SidePane({
 }) {
   const { t, err } = usePrefs();
   const qc = useQueryClient();
+  const authSession = authClient.useSession();
+  const emailVerified = Boolean(authSession.data?.user?.emailVerified);
+  const phoneOnlyAccount = me.email.endsWith("@phone.nini.invalid");
   const [name, setName] = useState(me.displayName);
   const [username, setUsername] = useState(me.username ?? "");
   const [about, setAbout] = useState(me.about);
@@ -1038,6 +1041,33 @@ function SidePane({
               </span>
             </button>
             <RowBtn onClick={() => go("blocked")}>{t("blocked")}</RowBtn>
+            <div className="rounded-xl bg-header p-3 text-sm">
+              <div className="mb-1 font-medium">{locale === "fa" ? "حساب و تأیید ایمیل" : "Account & email verification"}</div>
+              {phoneOnlyAccount ? (
+                <p className="text-muted">{locale === "fa" ? "این حساب با شماره موبایل ساخته شده است؛ ایمیل جداگانه‌ای به حساب متصل نیست." : "This account uses phone sign-in and has no email address attached."}</p>
+              ) : (
+                <>
+                  <p className="break-all text-muted">{me.email}</p>
+                  <p className={`mt-1 ${emailVerified ? "text-green-2" : "text-muted"}`}>
+                    {emailVerified
+                      ? (locale === "fa" ? "ایمیل تأیید شده است." : "Email verified.")
+                      : (locale === "fa" ? "تأیید ایمیل اختیاری است؛ بدون آن هم می‌توانی از برنامه استفاده کنی." : "Email verification is optional; you can use the app without it.")}
+                  </p>
+                  {!emailVerified ? (
+                    <button
+                      type="button"
+                      className="mt-3 h-10 w-full rounded-full bg-panel text-sm font-medium"
+                      onClick={() => void authClient.sendVerificationEmail({ email: me.email, callbackURL: window.location.origin }).then((res) => {
+                        if (res.error) toast.error(locale === "fa" ? "ارسال ایمیل تأیید انجام نشد؛ تنظیمات سرویس ایمیل را بررسی کن." : "Could not send verification email; check email provider configuration.");
+                        else toast.success(locale === "fa" ? "اگر سرویس ایمیل تنظیم شده باشد، لینک تأیید ارسال می‌شود." : "If email delivery is configured, a verification link will be sent.");
+                      }).catch(() => toast.error(t("errGeneric")))}
+                    >
+                      {locale === "fa" ? "ارسال لینک تأیید ایمیل" : "Send verification link"}
+                    </button>
+                  ) : null}
+                </>
+              )}
+            </div>
             <div className="rounded-xl bg-header p-3 text-sm">
               <div className="mb-2 font-medium">{t("language")}</div>
               <div className="flex gap-2">

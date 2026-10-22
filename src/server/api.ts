@@ -133,8 +133,8 @@ function toMe(row: ProfileRow, email: string): Me {
 }
 
 async function userRow(sql: Sql, userId: string) {
-  const rows = await sql<{ id: string; name: string; email: string }>`
-    select id, name, email from "user" where id = ${userId}
+  const rows = await sql<{ id: string; name: string; email: string; username: string | null }>`
+    select id, name, email, username from "user" where id = ${userId}
   `;
   return rows[0] ?? null;
 }
@@ -155,18 +155,11 @@ async function ensure(sql: Sql, userId: string): Promise<ProfileRow> {
   const user = await userRow(sql, userId);
   if (!user) throw new Error("Unauthorized");
   const name = clean(user.name, 50) || "User";
+  const username = typeof user.username === "string" ? user.username.trim().toLowerCase() || null : null;
   await sql`
-    insert into profiles (user_id, display_name, about, last_seen_at)
-    values (${userId}, ${name}, ${""}, now())
+    insert into profiles (user_id, username, display_name, about, last_seen_at)
+    values (${userId}, ${username}, ${name}, ${""}, now())
     on conflict (user_id) do nothing
-  `;
-  await sql`
-    update profiles set role = 'admin'
-    where user_id = ${userId}
-      and role <> 'admin'
-      and not exists (
-        select 1 from profiles where role = 'admin' and user_id <> ${userId}
-      )
   `;
   const created = await profileOf(sql, userId);
   if (!created) throw new Error("profile_failed");
@@ -300,6 +293,8 @@ export const getPublicConfig = createServerFn({ method: "GET" }).handler(async (
   const sql = await getSql();
   return {
     allowSignups: (await setting(sql, "allow_signups", "true")) !== "false",
+    allowEmailSignup: (await setting(sql, "allow_email_signup", "true")) !== "false",
+    allowPhoneSignup: (await setting(sql, "allow_phone_signup", "true")) !== "false",
     maintenance: await setting(sql, "maintenance_message", ""),
   };
 });
@@ -340,8 +335,12 @@ export const saveProfile = createServerFn({ method: "POST" })
       username = clean(data.username, 24).toLowerCase();
       if (!USERNAME.test(username)) return err("username_invalid");
       const taken = await sql<{ user_id: string }>`
+        select id as user_id from "user"
+        where lower(username) = ${username} and id <> ${context.userId}
+        union all
         select user_id from profiles
         where lower(username) = ${username} and user_id <> ${context.userId}
+        limit 1
       `;
       if (taken.length) return err("username_taken");
     }
@@ -394,6 +393,12 @@ export const saveProfile = createServerFn({ method: "POST" })
       avatarMime = mime;
     }
 
+    try {
+      await sql`update "user" set username = ${username}, name = ${displayName}, "updatedAt" = now() where id = ${context.userId}`;
+    } catch (error) {
+      if ((error as { code?: string })?.code === "23505") return err("username_taken");
+      throw error;
+    }
     await sql`
       update profiles set
         username = ${username},
@@ -412,9 +417,6 @@ export const saveProfile = createServerFn({ method: "POST" })
       where user_id = ${context.userId}
     `;
     const user = await userRow(sql, context.userId);
-    if (displayName && user) {
-      await sql`update "user" set name = ${displayName}, "updatedAt" = now() where id = ${context.userId}`;
-    }
     const fresh = await profileOf(sql, context.userId);
     if (!fresh) return err("profile_failed");
     return ok(toMe(fresh, user?.email ?? ""));
@@ -1809,7 +1811,10 @@ export const adminSaveUser = createServerFn({ method: "POST" })
         const taken = await sql<{ user_id: string }>`
           select user_id from profiles where lower(username) = ${next} and user_id <> ${userId}
         `;
-        if (taken.length) return err("username_taken");
+        const authTaken = await sql<{ id: string }>`
+          select id from "user" where lower(username) = ${next} and id <> ${userId} limit 1
+        `;
+        if (taken.length || authTaken.length) return err("username_taken");
       }
       username = next || null;
     }
@@ -1834,6 +1839,12 @@ export const adminSaveUser = createServerFn({ method: "POST" })
       if (num(admins[0]?.n) <= 1) return err("last_admin");
     }
     const about = data.about === undefined ? target.about : clean(data.about, 140);
+    try {
+      await sql`update "user" set name = ${displayName}, username = ${username}, "updatedAt" = now() where id = ${userId}`;
+    } catch (error) {
+      if ((error as { code?: string })?.code === "23505") return err("username_taken");
+      throw error;
+    }
     await sql`
       update profiles set
         display_name = ${displayName},
@@ -1845,7 +1856,6 @@ export const adminSaveUser = createServerFn({ method: "POST" })
         updated_at = now()
       where user_id = ${userId}
     `;
-    await sql`update "user" set name = ${displayName}, "updatedAt" = now() where id = ${userId}`;
     return ok(true);
   });
 
@@ -1870,7 +1880,7 @@ export const adminCreateUser = createServerFn({ method: "POST" })
     const { auth } = await import("@/lib/auth/server");
     try {
       const created = await auth.api.signUpEmail({
-        body: { email, password, name: displayName },
+        body: { email, password, name: displayName, username },
       });
       const userId = created.user.id;
       await sql`
@@ -1881,6 +1891,7 @@ export const adminCreateUser = createServerFn({ method: "POST" })
       return ok({ userId });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
+      if (/user_username_lower_unique|username.*unique/i.test(message)) return err("username_taken");
       if (/exist|unique|already/i.test(message)) return err("email_taken");
       return err("auth_failed");
     }
@@ -2050,6 +2061,8 @@ export const adminGetSettings = createServerFn({ method: "GET" })
     await requireAdmin(sql, context.userId);
     return {
       allowSignups: (await setting(sql, "allow_signups", "true")) !== "false",
+      allowEmailSignup: (await setting(sql, "allow_email_signup", "true")) !== "false",
+      allowPhoneSignup: (await setting(sql, "allow_phone_signup", "true")) !== "false",
       maxUploadBytes: Number(await setting(sql, "max_upload_bytes", "2000000")),
       maintenance: await setting(sql, "maintenance_message", ""),
     };
@@ -2062,12 +2075,20 @@ export const adminSaveSettings = createServerFn({ method: "POST" })
     const sql = await getSql();
     await requireAdmin(sql, context.userId);
     const allow = Boolean(data.allowSignups);
+    const allowEmail = data.allowEmailSignup === undefined
+      ? (await setting(sql, "allow_email_signup", "true")) !== "false"
+      : Boolean(data.allowEmailSignup);
+    const allowPhone = data.allowPhoneSignup === undefined
+      ? (await setting(sql, "allow_phone_signup", "true")) !== "false"
+      : Boolean(data.allowPhoneSignup);
     let max = Number(data.maxUploadBytes);
     if (!Number.isFinite(max)) max = 2_000_000;
     max = Math.min(4_000_000, Math.max(100_000, Math.floor(max)));
     const maintenance = clean(data.maintenance, 240);
     const pairs: [string, string][] = [
       ["allow_signups", allow ? "true" : "false"],
+      ["allow_email_signup", allowEmail ? "true" : "false"],
+      ["allow_phone_signup", allowPhone ? "true" : "false"],
       ["max_upload_bytes", String(max)],
       ["maintenance_message", maintenance],
     ];

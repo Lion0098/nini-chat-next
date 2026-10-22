@@ -60,7 +60,7 @@ test("the canonical migration directory contains ordered SQL migrations", () => 
   const migrationsDir = join(projectRoot(), "migrations");
   const rootEntries = readdirSync(migrationsDir);
   const names = pendingMigrations(rootEntries, []).map(({ name }) => name);
-  assert.deepEqual(names, ["0001_auth.sql", "0002_messenger.sql", "0003_data_integrity.sql"]);
+  assert.deepEqual(names, ["0001_auth.sql", "0002_messenger.sql", "0003_data_integrity.sql", "0004_auth_lifecycle.sql"]);
   assert.ok(readdirSync(join(migrationsDir, "auth")).includes("0001_auth.sql"));
 });
 
