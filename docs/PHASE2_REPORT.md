@@ -1,7 +1,9 @@
 # Phase 2 — Data Model and Durable Messaging Foundation
 
-**Status:** Implementation branch prepared; automated validation pending.  
-**Branch:** `phase2/data-model` (based on the validated Phase 1 branch; not merged to `main`).
+**Status: COMPLETE — focused tests, production build, Docker image build, and PostgreSQL runtime smoke tests passed.**  
+**Branch:** `phase2/data-model` (based on the validated Phase 1 branch; not merged to `main`).  
+**Validated commit:** `fbdce0b81610809e2b8d450db3a3901ee2446207`  
+**Successful CI run:** [39869089304](https://github.com/Lion0098/nini-chat-next/actions/runs/39869089304)
 
 ## Scope
 
