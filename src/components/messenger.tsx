@@ -263,7 +263,7 @@ function Shell({ me }: { me: Me }) {
 
   async function loadOlder() {
     if (!chatId || !messages[0]) return;
-    const page = await listMessages({ data: { chatId, before: messages[0].createdAt } });
+    const page = await listMessages({ data: { chatId, before: messages[0].createdAt, beforeId: messages[0].id } });
     if (!page) return;
     setOlder((cur) => {
       const map = new Map(cur.map((m) => [m.id, m]));

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - phase1/ubuntu-deployment
+      - phase2/data-model
   workflow_dispatch:
 
 permissions:
@@ -23,6 +24,8 @@ jobs:
           cache: npm
       - name: Verify clean dependency install
         run: npm ci
+      - name: Verify migration and data-model contracts
+        run: node --test scripts/migration-plan.test.mjs scripts/data-model.test.mjs
       - name: Build production bundle
         run: npm run build
       - name: Create disposable CI environment
@@ -47,6 +50,52 @@ jobs:
           docker compose ps
           docker compose logs --tail=150 app db
           exit 1
+      - name: Verify direct-chat uniqueness, message cursor, and audit schema
+        run: |
+          docker compose exec -T db psql -v ON_ERROR_STOP=1 -U nini_chat -d nini_chat <<'SQL'
+          INSERT INTO profiles (user_id, username, display_name) VALUES
+            ('phase2_user_a', 'phase2_user_a', 'Phase 2 A'),
+            ('phase2_user_b', 'phase2_user_b', 'Phase 2 B')
+          ON CONFLICT (user_id) DO NOTHING;
+          WITH new_chat AS (
+            INSERT INTO chats (id, kind, title, created_by, direct_user_a, direct_user_b)
+            VALUES ('phase2-chat-a', 'direct', '', 'phase2_user_a', 'phase2_user_a', 'phase2_user_b')
+            ON CONFLICT (direct_user_a, direct_user_b)
+              WHERE kind = 'direct' AND direct_user_a IS NOT NULL AND direct_user_b IS NOT NULL
+            DO NOTHING
+            RETURNING id
+          ), new_members AS (
+            INSERT INTO chat_members (chat_id, user_id, role)
+            SELECT new_chat.id, members.user_id, 'member'
+            FROM new_chat CROSS JOIN (VALUES ('phase2_user_a'::text), ('phase2_user_b'::text)) AS members(user_id)
+            ON CONFLICT DO NOTHING
+            RETURNING chat_id
+          ) SELECT id FROM new_chat;
+          INSERT INTO chats (id, kind, title, created_by, direct_user_a, direct_user_b)
+          VALUES ('phase2-chat-b', 'direct', '', 'phase2_user_a', 'phase2_user_a', 'phase2_user_b')
+          ON CONFLICT (direct_user_a, direct_user_b)
+            WHERE kind = 'direct' AND direct_user_a IS NOT NULL AND direct_user_b IS NOT NULL
+          DO NOTHING;
+          DO $$ BEGIN
+            IF (SELECT count(*) FROM chats WHERE direct_user_a = 'phase2_user_a' AND direct_user_b = 'phase2_user_b') <> 1 THEN
+              RAISE EXCEPTION 'direct chat pair uniqueness failed';
+            END IF;
+            IF (SELECT count(*) FROM chat_members WHERE chat_id = 'phase2-chat-a') <> 2 THEN
+              RAISE EXCEPTION 'direct chat membership atomicity failed';
+            END IF;
+          END $$;
+          INSERT INTO messages (id, chat_id, sender_id, kind, body, created_at) VALUES
+            ('phase2-msg-a', 'phase2-chat-a', 'phase2_user_a', 'text', 'cursor-a', '2026-01-01T00:00:00Z'),
+            ('phase2-msg-b', 'phase2-chat-a', 'phase2_user_b', 'text', 'cursor-b', '2026-01-01T00:00:00Z');
+          DO $$ BEGIN
+            IF (SELECT count(*) FROM messages WHERE (created_at, id) < ('2026-01-01T00:00:00Z'::timestamptz, 'phase2-msg-b')) <> 1 THEN
+              RAISE EXCEPTION 'stable timestamp/id cursor failed';
+            END IF;
+          END $$;
+          INSERT INTO audit_events (id, actor_id, action, target_type, target_id, metadata)
+          VALUES ('phase2-audit-probe', 'phase2_user_a', 'phase2.schema.smoke', 'chat', 'phase2-chat-a', '{"source":"ci"}'::jsonb);
+          SELECT 1 / CASE WHEN EXISTS (SELECT 1 FROM audit_events WHERE id = 'phase2-audit-probe' AND metadata->>'source' = 'ci') THEN 1 ELSE 0 END;
+          SQL
       - name: Verify PostgreSQL data survives container restart
         run: |
           docker compose exec -T db psql -v ON_ERROR_STOP=1 -U nini_chat -d nini_chat -c "CREATE TABLE IF NOT EXISTS phase1_persistence_probe (id integer PRIMARY KEY, marker text NOT NULL); INSERT INTO phase1_persistence_probe (id, marker) VALUES (1, 'phase1-ok') ON CONFLICT (id) DO UPDATE SET marker = EXCLUDED.marker;"

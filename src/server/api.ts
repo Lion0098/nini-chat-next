@@ -604,7 +604,7 @@ export const listChats = createServerFn({ method: "GET" })
        from messages m
        left join profiles p on p.user_id = m.sender_id
        where m.chat_id in (${ids.map((_, i) => `$${i + 1}`).join(", ")})
-       order by m.chat_id, m.created_at desc`,
+       order by m.chat_id, m.created_at desc, m.id desc`,
       ids,
     );
     const lastByChat = new Map(lasts.map((m) => [m.chat_id, m]));
@@ -736,7 +736,8 @@ export const listMessages = createServerFn({ method: "GET" })
     const chatId = clean(o.chatId, 80);
     if (!chatId) throw new Error("bad_input");
     const before = o.before ? clean(o.before, 40) : null;
-    return { chatId, before };
+    const beforeId = o.beforeId ? clean(o.beforeId, 80) : null;
+    return { chatId, before, beforeId };
   })
   .middleware([authMiddleware])
   .handler(async ({ context, data }): Promise<Thread | null> => {
@@ -814,9 +815,12 @@ export const listMessages = createServerFn({ method: "GET" })
       left join messages r on r.id = m.reply_to
       left join profiles rp on rp.user_id = r.sender_id
       where m.chat_id = ${data.chatId}
-        and m.created_at < ${before}::timestamptz
+        and (
+          (${data.beforeId}::text is not null and (m.created_at, m.id) < (${before}::timestamptz, ${data.beforeId}::text))
+          or (${data.beforeId}::text is null and m.created_at < ${before}::timestamptz)
+        )
         and (cm.cleared_at is null or m.created_at > cm.cleared_at)
-      order by m.created_at desc
+      order by m.created_at desc, m.id desc
       limit 81
     `;
     const hasMore = rows.length > 80;
@@ -1045,30 +1049,83 @@ export const openDirect = createServerFn({ method: "POST" })
     const other = await profileOf(sql, data.userId);
     if (!other || bool(other.suspended)) return err("not_found");
     if (await blockedEither(sql, context.userId, data.userId)) return err("blocked");
-    const existing = await sql<{ id: string }>`
+    const userA = context.userId < data.userId ? context.userId : data.userId;
+    const userB = context.userId < data.userId ? data.userId : context.userId;
+    const existingPair = await sql<{ id: string }>`
+      select id from chats
+      where kind = 'direct' and direct_user_a = ${userA} and direct_user_b = ${userB}
+      limit 1
+    `;
+    if (existingPair[0]) return ok({ id: existingPair[0].id });
+
+    // Adopt a pre-migration direct chat before creating another one. Only exactly
+    // two-member chats qualify; malformed legacy chats are not silently reused.
+    const legacy = await sql<{ id: string }>`
       select c.id from chats c
       join chat_members a on a.chat_id = c.id and a.user_id = ${context.userId}
       join chat_members b on b.chat_id = c.id and b.user_id = ${data.userId}
       where c.kind = 'direct'
+        and (select count(*) from chat_members cm where cm.chat_id = c.id) = 2
+      order by c.created_at asc, c.id asc
       limit 1
     `;
-    if (existing[0]) return ok({ id: existing[0].id });
+    if (legacy[0]) {
+      try {
+        await sql`
+          update chats set direct_user_a = ${userA}, direct_user_b = ${userB}
+          where id = ${legacy[0].id} and kind = 'direct'
+            and direct_user_a is null and direct_user_b is null
+        `;
+      } catch (error) {
+        if ((error as { code?: string })?.code !== '23505') throw error;
+      }
+      const canonical = await sql<{ id: string }>`
+        select id from chats
+        where kind = 'direct' and direct_user_a = ${userA} and direct_user_b = ${userB}
+        limit 1
+      `;
+      return ok({ id: canonical[0]?.id ?? legacy[0].id });
+    }
+
     const id = crypto.randomUUID();
-    await sql`
-      insert into chats (id, kind, title, created_by) values (${id}, 'direct', ${""}, ${context.userId})
-    `;
-    await sql`
-      insert into chat_members (chat_id, user_id, role) values
-        (${id}, ${context.userId}, 'member'),
-        (${id}, ${data.userId}, 'member')
-    `;
+    // The chat and both memberships commit in one SQL statement. The partial
+    // unique index arbitrates concurrent requests for the same user pair.
+    const created = await sql.query<{ id: string }>(
+      `with new_chat as (
+         insert into chats (id, kind, title, created_by, direct_user_a, direct_user_b)
+         values ($1, 'direct', '', $2, $3, $4)
+         on conflict (direct_user_a, direct_user_b)
+           where kind = 'direct' and direct_user_a is not null and direct_user_b is not null
+         do nothing
+         returning id
+       ), new_members as (
+         insert into chat_members (chat_id, user_id, role)
+         select new_chat.id, members.user_id, 'member'
+         from new_chat
+         cross join (values ($5::text), ($6::text)) as members(user_id)
+         on conflict do nothing
+         returning chat_id
+       )
+       select id from new_chat`,
+      [id, context.userId, userA, userB, context.userId, data.userId],
+    );
+    let chatId = created[0]?.id;
+    if (!chatId) {
+      const raced = await sql<{ id: string }>`
+        select id from chats
+        where kind = 'direct' and direct_user_a = ${userA} and direct_user_b = ${userB}
+        limit 1
+      `;
+      if (!raced[0]) throw new Error('direct_chat_creation_conflict');
+      chatId = raced[0].id;
+    }
     await sql`
       insert into contacts (owner_id, contact_id) values
         (${context.userId}, ${data.userId}),
         (${data.userId}, ${context.userId})
       on conflict do nothing
     `;
-    return ok({ id });
+    return ok({ id: chatId });
   });
 
 export const createGroup = createServerFn({ method: "POST" })
