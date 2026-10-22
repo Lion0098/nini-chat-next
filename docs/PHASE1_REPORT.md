@@ -1,8 +1,8 @@
 # Phase 1 — Ubuntu Deployment Foundation Report
 
-**Status:** Deployment scaffolding implemented; CI caught a pre-existing lockfile mismatch and is being used to repair and validate it.  
+**Status:** Deployment scaffolding implemented. Clean install, production build, and Docker image build have passed on GitHub Actions; runtime integration checks are now being added.  
 **Branch:** `phase1/ubuntu-deployment`  
-**Implementation commit:** `0447b22ac33f3ec97a49b4d8023728a6fdb28149`  
+**Lockfile repair commit:** `0d338224fe3ba492b8ef150c14e427e9c3e9ef35`  
 **Validation workflow:** [Phase 1 Ubuntu deployment build](https://github.com/Lion0098/nini-chat-next/actions/workflows/phase1-deployment.yml)
 
 ## Changes made
@@ -15,26 +15,34 @@
 - Added `/api/health`, which returns healthy only when a PostgreSQL query succeeds.
 - Added a multi-stage Node 22 Dockerfile, Docker Compose with PostgreSQL 16 and a persistent named volume, `.env.example`, `.dockerignore`, and an Nginx TLS reverse-proxy example.
 - Added `docs/UBUNTU_DEPLOYMENT.md` with configuration, start, health-check, operational, backup, and restore guidance.
-- Added GitHub Actions validation for a clean install, production build, and Docker image build.
+- Repaired and committed the npm lockfile mismatch discovered by the first CI run.
+- Added GitHub Actions validation for clean install, production build, Docker Compose configuration, image build, and runtime checks.
 
-## Static validation performed
+## Confirmed validation
 
-- Docker Compose YAML parsed successfully.
-- `package.json` parsed and the new `start`/required-migration scripts were verified; build no longer runs migrations.
-- Deployment safety assertions passed for the Node server preset, production database guard, production OAuth fallback behavior, and required migration mode.
-- `node --check` passed for `scripts/start-production.mjs` and `scripts/migrate.mjs` when checked as `.mjs` files.
+The successful workflow run [39867452546](https://github.com/Lion0098/nini-chat-next/actions/runs/39867452546) passed all of these steps:
 
-## CI finding and current validation status
+- `npm ci` — clean locked dependency installation.
+- `npm run build` — production bundle generation.
+- `docker build --tag nini-chat:phase1 .` — production image build.
 
-The first GitHub Actions run failed at `npm ci` before application compilation. The concrete error is a pre-existing mismatch between `package.json` and `package-lock.json` (including an `ajv` 6.x/8.x resolution conflict). This confirms the earlier install problem was not just local networking. The workflow has been updated to regenerate the lockfile, commit it on this isolated branch if changed, then rerun `npm ci`, the production build, and Docker image build. The final run must be checked before calling Phase 1 fully validated.
+The first workflow run failed before compilation due to the stale npm lockfile. The lockfile was regenerated and committed by GitHub Actions on this branch; the subsequent clean install/build/image build all passed.
 
-The current execution environment has no Docker binary, so the image cannot be built locally. No production build, live deployment, PostgreSQL persistence/restart test, or restore test is claimed yet.
+## Runtime validation now being added
 
-No VPS, firewall, DNS, domain, TLS certificate, or production service was changed. No secrets were added to Git. The branch is intentionally not merged into `main` pending validation and user approval.
+The workflow now runs the application and PostgreSQL together via Docker Compose, waits for `/api/health`, checks that a PostgreSQL probe row survives a database container restart, and verifies application health after database and app restarts. These checks must complete successfully before we treat the runtime portion as validated.
 
-## Review checkpoint
+## Scope and remaining limits
 
-1. Check the workflow result and ensure the lockfile update (if needed) is committed on this branch.
-2. If the clean install, production build, and Docker build pass, review the deployment files and confirm the intended VPS details before deployment.
-3. If a step fails, fix it within Phase 1 and rerun validation.
-4. Move to Phase 2 only after the user explicitly approves the Phase 1 results.
+- No VPS, firewall, DNS, domain, TLS certificate, or production service was changed.
+- The CI test uses disposable data and test-only random secrets. No production secrets are stored in Git.
+- A CI persistence check is not a full backup-and-restore drill; that still needs to be performed before production release.
+- Email/password flows, SMS.ir integration, app functionality, and the planned admin panel are later phases, not part of this deployment foundation.
+- The branch is intentionally not merged into `main` pending final validation and user approval.
+
+## Acceptance checkpoint
+
+1. Confirm the latest workflow passes the clean install, production build, image build, startup/health, database restart persistence, and application restart steps.
+2. Review `docs/UBUNTU_DEPLOYMENT.md` and confirm VPS details before any real deployment.
+3. Before production release, perform a protected backup-and-restore test and configure real DNS/TLS and firewall rules.
+4. Move to Phase 2 only after the user explicitly approves Phase 1.
