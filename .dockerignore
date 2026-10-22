@@ -1,0 +1,15 @@
+.git
+.github
+node_modules
+.output
+dist
+.vite
+.nitro
+.vercel
+coverage
+*.log
+.env
+.env.*
+!.env.example
+hosting/storage
+screenshots

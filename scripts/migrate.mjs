@@ -18,11 +18,14 @@ import { dirname, join } from "node:path";
 import pg from "pg";
 import { pendingMigrations } from "./migration-plan.mjs";
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = process.env.DATABASE_URL?.trim();
+const required = process.argv.includes("--required") || process.env.NODE_ENV === "production";
 if (!databaseUrl) {
-  console.log(
-    "[migrate] DATABASE_URL not set — skipping (the PGLite fallback migrates itself).",
-  );
+  if (required) {
+    console.error("[migrate] DATABASE_URL is required for production migrations.");
+    process.exit(1);
+  }
+  console.log("[migrate] DATABASE_URL not set — skipping local migration.");
   process.exit(0);
 }
 

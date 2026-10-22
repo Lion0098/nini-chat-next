@@ -9,6 +9,8 @@ const rawDatabaseUrl =
   typeof process !== "undefined" ? process.env.DATABASE_URL : undefined;
 const databaseUrl =
   rawDatabaseUrl && rawDatabaseUrl.trim() ? rawDatabaseUrl : undefined;
+const isProduction =
+  typeof process !== "undefined" && process.env.NODE_ENV === "production";
 
 /**
  * Active backend: real **Neon** when `DATABASE_URL` is set (deployed / configured
@@ -170,6 +172,9 @@ async function createPgliteSql(): Promise<Sql> {
 let sqlPromise: Promise<Sql> | null = null;
 
 async function createSql(): Promise<Sql> {
+  if (isProduction && !databaseUrl) {
+    throw new Error("DATABASE_URL is required in production; PGlite is development-only.");
+  }
   if (typeof window !== "undefined") {
     throw new Error(
       "@/lib/db is server-only — call getSql() from a createServerFn handler " +
@@ -200,6 +205,9 @@ export function getSql(): Promise<Sql> {
  * Kysely dialect). Throws when `DATABASE_URL` is set (that path uses Neon).
  */
 export async function getPglite(): Promise<import("@electric-sql/pglite").PGlite> {
+  if (isProduction) {
+    throw new Error("PGlite is disabled in production; configure DATABASE_URL.");
+  }
   if (dbSource !== "pglite") {
     throw new Error("getPglite() is only available on the PGLite fallback (no DATABASE_URL)");
   }
@@ -220,6 +228,9 @@ export async function getPglite(): Promise<import("@electric-sql/pglite").PGlite
  * module kick it off immediately (see bottom of file).
  */
 export function ensureDbReady(): Promise<void> {
+  if (isProduction && !databaseUrl) {
+    return Promise.reject(new Error("DATABASE_URL is required in production; PGlite is development-only."));
+  }
   if (dbSource !== "pglite") return Promise.resolve();
   return getSql().then(() => undefined);
 }
@@ -229,7 +240,7 @@ export function ensureDbReady(): Promise<void> {
 const globalBoot = globalThis as typeof globalThis & {
   __pgBootstrapPromise__?: Promise<void>;
 };
-if (typeof window === "undefined" && dbSource === "pglite") {
+if (typeof window === "undefined" && dbSource === "pglite" && !isProduction) {
   globalBoot.__pgBootstrapPromise__ ??= ensureDbReady().catch((err) => {
     globalBoot.__pgBootstrapPromise__ = undefined;
     console.error("[db] PGLite bootstrap failed:", err);
