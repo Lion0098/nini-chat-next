@@ -25,14 +25,14 @@ jobs:
         run: npm ci
       - name: Build production bundle
         run: npm run build
-      - name: Validate Compose configuration
-        run: docker compose config --quiet
-      - name: Build production Docker image
-        run: docker compose build app
       - name: Create disposable CI environment
         run: |
           printf 'POSTGRES_DB=nini_chat\nPOSTGRES_USER=nini_chat\nPOSTGRES_PASSWORD=%s\nBETTER_AUTH_SECRET=%s\nBETTER_AUTH_URL=https://chat.example.com\n' "$(openssl rand -hex 24)" "$(openssl rand -hex 32)" > .env
           chmod 600 .env
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+      - name: Build production Docker image
+        run: docker compose build app
       - name: Start PostgreSQL and application
         run: docker compose up -d
       - name: Wait for application health

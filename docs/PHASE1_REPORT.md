@@ -30,7 +30,7 @@ The first workflow run failed before compilation due to the stale npm lockfile. 
 
 ## Runtime validation now being added
 
-The workflow now runs the application and PostgreSQL together via Docker Compose, waits for `/api/health`, checks that a PostgreSQL probe row survives a database container restart, and verifies application health after database and app restarts. These checks must complete successfully before we treat the runtime portion as validated.
+The first runtime-workflow attempt correctly passed `npm ci` and the production build, then exposed a test-harness ordering issue: Compose configuration was validated before the disposable CI `.env` was created. This was a workflow-ordering issue, not an application failure. The workflow has been corrected to create throwaway test secrets before Compose validation; the full runtime check must be rerun. It then starts the application and PostgreSQL via Docker Compose, waits for `/api/health`, checks that a PostgreSQL probe row survives a database container restart, and verifies application health after database and app restarts. These checks must complete successfully before we treat the runtime portion as validated.
 
 ## Scope and remaining limits
 
