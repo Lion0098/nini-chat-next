@@ -1,7 +1,9 @@
 # Phase 3 — Authentication and Account Lifecycle
 
-**Status:** Implementation branch prepared; CI validation pending.  
-**Branch:** `phase3/auth-lifecycle` (based on the validated Phase 2 branch; not merged to `main`).
+**Status: CI PASSED — focused auth tests, production build, Docker image, and PostgreSQL runtime checks passed. External email/SMS delivery still requires provider configuration and a real deployment smoke test.**  
+**Branch:** `phase3/auth-lifecycle` (based on the validated Phase 2 branch; not merged to `main`).  
+**Commit:** `24c430291c2fb25147324b374ecc248645cb3420`  
+**Successful CI run:** [39870814285](https://github.com/Lion0098/nini-chat-next/actions/runs/39870814285)
 
 ## Implemented in this branch
 
@@ -26,6 +28,24 @@
 - The admin UI now controls which registration methods accept new users. Mandatory email-verification policy and a safe identity-linking flow remain intentionally gated for a later admin/security phase; account linking is currently disabled.
 - A successful CI run validates compilation, migrations, database constraints, and focused contract tests. It does not prove external SMS/email delivery or deployment to the actual VPS.
 
-## Validation checklist
+## Validation — CI passed
 
-The Phase 3 CI run must pass clean dependency installation, migration/auth contract tests, phone normalization tests, production build, Docker image build, PostgreSQL migration, case-insensitive username uniqueness, phone uniqueness, OTP schema presence, and database/application restart checks. External delivery and full browser registration flows must then be verified using the configured Sandbox/email provider before this phase is considered fully production-validated.
+Successful run [39870814285](https://github.com/Lion0098/nini-chat-next/actions/runs/39870814285) confirmed:
+
+1. Clean locked dependency install (`npm ci`).
+2. Migration-plan, data-model, and auth-lifecycle contract tests passed.
+3. Iranian phone normalization unit tests passed under Node.js 22 TypeScript stripping.
+4. Production build and Docker image build passed.
+5. Docker Compose configuration passed; PostgreSQL and the app started and `/api/health` succeeded after migrations ran.
+6. Database checks rejected case-variant duplicate usernames and duplicate phone numbers.
+7. The `phone_otp_challenges` table and default registration-method settings exist after migration.
+8. Existing data persisted across database restart; the application recovered after database and app restarts.
+
+## Still required before Phase 3 is fully accepted
+
+- Configure SMS.ir Sandbox credentials and the Verify template on the deployment environment, then test OTP send, correct/incorrect code, expiry, attempt cap, resend cooldown, and replay rejection end-to-end.
+- Configure a verified email sender and test the manual verification email and callback link end-to-end.
+- Run real browser tests for email signup/login/logout and phone signup/login. CI currently validates the code contract and database schema; it does not send external messages.
+- Keep automatic account linking disabled until an authenticated proof-of-control flow is implemented. Mandatory verification-policy toggles remain in the later platform-settings phase.
+
+**Phase 3 implementation is ready for review, but the phase must not be treated as fully production-validated or merged to `main` until external Sandbox/email tests and user approval are complete.**
