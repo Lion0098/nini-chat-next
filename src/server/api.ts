@@ -702,6 +702,7 @@ type MsgRow = {
   reply_body: string | null;
   reply_deleted: unknown;
   reply_sender: string | null;
+  receipt_status: string | null;
 };
 
 function mapMessage(row: MsgRow, me: string): ChatMessage {
@@ -729,6 +730,7 @@ function mapMessage(row: MsgRow, me: string): ChatMessage {
     editedAt: iso(row.edited_at),
     deleted,
     mine: row.sender_id === me,
+    receiptStatus: row.sender_id === me ? (row.receipt_status === "read" || row.receipt_status === "delivered" ? row.receipt_status : "sent") : null,
   };
 }
 
@@ -810,12 +812,21 @@ export const listMessages = createServerFn({ method: "GET" })
              m.reply_to, m.created_at, m.edited_at, m.deleted_at,
              p.display_name as sender_name,
              r.kind as reply_kind, r.body as reply_body, r.deleted_at as reply_deleted,
-             rp.display_name as reply_sender
+             rp.display_name as reply_sender,
+             receipt.receipt_status
       from messages m
       join chat_members cm on cm.chat_id = m.chat_id and cm.user_id = ${context.userId}
       left join profiles p on p.user_id = m.sender_id
       left join messages r on r.id = m.reply_to
       left join profiles rp on rp.user_id = r.sender_id
+      left join lateral (
+        select case
+          when count(*) > 0 and bool_and(read_at is not null) then 'read'
+          when bool_or(delivered_at is not null) then 'delivered'
+          else 'sent'
+        end as receipt_status
+        from message_receipts mr where mr.message_id = m.id
+      ) receipt on true
       where m.chat_id = ${data.chatId}
         and (
           (${data.beforeId}::text is not null and (m.created_at, m.id) < (${before}::timestamptz, ${data.beforeId}::text))
@@ -827,6 +838,17 @@ export const listMessages = createServerFn({ method: "GET" })
     `;
     const hasMore = rows.length > 80;
     const slice = rows.slice(0, 80).reverse();
+    await sql`
+      update message_receipts mr
+      set delivered_at = coalesce(mr.delivered_at, now())
+      from messages m
+      where mr.message_id = m.id and m.chat_id = ${data.chatId}
+        and mr.recipient_id = ${context.userId} and mr.delivered_at is null
+        and m.created_at > coalesce((
+          select cleared_at from chat_members
+          where chat_id = m.chat_id and user_id = ${context.userId}
+        ), '-infinity'::timestamptz)
+    `;
     const typing = await sql<{ display_name: string }>`
       select coalesce(p.display_name, '') as display_name
       from typing t
@@ -869,6 +891,13 @@ export const markOpen = createServerFn({ method: "POST" })
     const mem = await memberRole(sql, data.chatId, context.userId);
     if (!mem) return err("not_found");
     if (bool(me.read_receipts)) {
+      await sql`
+        update message_receipts mr
+        set delivered_at = coalesce(mr.delivered_at, now()), read_at = coalesce(mr.read_at, now())
+        from messages m
+        where mr.message_id = m.id and m.chat_id = ${data.chatId}
+          and mr.recipient_id = ${context.userId} and m.sender_id <> ${context.userId}
+      `;
       await sql`
         update chat_members
         set last_open_at = now(), last_read_at = now()
@@ -964,6 +993,12 @@ export const sendMessage = createServerFn({ method: "POST" })
         ${fileName}, ${fileMime}, ${fileData}, ${fileSize}, ${replyTo}
       )
     `;
+    await sql`
+      insert into message_receipts (message_id, recipient_id)
+      select ${id}, user_id from chat_members
+      where chat_id = ${chatId} and user_id <> ${context.userId}
+      on conflict (message_id, recipient_id) do nothing
+    `;
     await sql`update chats set updated_at = now() where id = ${chatId}`;
     await sql`delete from typing where chat_id = ${chatId} and user_id = ${context.userId}`;
     return ok({ id });
@@ -979,7 +1014,9 @@ export const editMessage = createServerFn({ method: "POST" })
     const body = clean(data.body, 4000);
     if (!id || !body) return err("empty");
     const rows = await sql<{ sender_id: string; kind: string; deleted_at: unknown }>`
-      select sender_id, kind, deleted_at from messages where id = ${id}
+      select m.sender_id, m.kind, m.deleted_at from messages m
+      join chat_members cm on cm.chat_id = m.chat_id and cm.user_id = ${context.userId}
+      where m.id = ${id}
     `;
     const row = rows[0];
     if (!row || row.sender_id !== context.userId || row.kind !== "text" || row.deleted_at) {
@@ -1000,7 +1037,9 @@ export const deleteMessage = createServerFn({ method: "POST" })
     const sql = await getSql();
     await gate(sql, context.userId);
     const rows = await sql<{ sender_id: string }>`
-      select sender_id from messages where id = ${data.id} and deleted_at is null
+      select m.sender_id from messages m
+      join chat_members cm on cm.chat_id = m.chat_id and cm.user_id = ${context.userId}
+      where m.id = ${data.id} and m.deleted_at is null
     `;
     if (!rows[0] || rows[0].sender_id !== context.userId) return err("forbidden");
     await sql`

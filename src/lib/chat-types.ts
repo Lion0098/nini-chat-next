@@ -104,6 +104,7 @@ export type ChatMessage = {
   editedAt: string | null;
   deleted: boolean;
   mine: boolean;
+  receiptStatus: "sent" | "delivered" | "read" | null;
 };
 
 export type Thread = {
