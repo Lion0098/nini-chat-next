@@ -51,3 +51,20 @@ CREATE TABLE IF NOT EXISTS ops_check_events (
   checked_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS ops_check_events_checked_idx ON ops_check_events(checked_at DESC);
+
+-- Database-backed coarse rate limiting for authentication entry points.
+CREATE TABLE IF NOT EXISTS auth_rate_limit_buckets (
+  bucket_key text PRIMARY KEY,
+  window_started_at timestamptz NOT NULL DEFAULT now(),
+  attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS auth_rate_limit_buckets_updated_idx ON auth_rate_limit_buckets(updated_at);
+INSERT INTO system_settings(key,value) VALUES
+  ('rate_limit_login_max','10'),
+  ('rate_limit_signup_max','5'),
+  ('rate_limit_otp_max','3'),
+  ('rate_limit_window_seconds','60'),
+  ('require_email_verification','false'),
+  ('require_phone_verification','false')
+ON CONFLICT (key) DO NOTHING;

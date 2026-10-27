@@ -419,21 +419,27 @@ function SettingsForm({
   initial,
   onSave,
 }: {
-  initial: { allowSignups: boolean; allowEmailSignup: boolean; allowPhoneSignup: boolean; maxUploadBytes: number; maintenance: string };
-  onSave: (v: { allowSignups: boolean; allowEmailSignup: boolean; allowPhoneSignup: boolean; maxUploadBytes: number; maintenance: string }) => Promise<void>;
+  initial: { allowSignups: boolean; allowEmailSignup: boolean; allowPhoneSignup: boolean; maxUploadBytes: number; rateLimitLoginMax: number; rateLimitSignupMax: number; rateLimitOtpMax: number; rateLimitWindowSeconds: number; requireEmailVerification: boolean; requirePhoneVerification: boolean; maintenance: string };
+  onSave: (v: { allowSignups: boolean; allowEmailSignup: boolean; allowPhoneSignup: boolean; maxUploadBytes: number; rateLimitLoginMax: number; rateLimitSignupMax: number; rateLimitOtpMax: number; rateLimitWindowSeconds: number; requireEmailVerification: boolean; requirePhoneVerification: boolean; maintenance: string }) => Promise<void>;
 }) {
   const { t, locale } = usePrefs();
   const [allowSignups, setAllow] = useState(initial.allowSignups);
   const [allowEmailSignup, setAllowEmail] = useState(initial.allowEmailSignup);
   const [allowPhoneSignup, setAllowPhone] = useState(initial.allowPhoneSignup);
   const [maxUploadBytes, setMax] = useState(String(initial.maxUploadBytes));
+  const [rateLimitLoginMax, setRateLogin] = useState(String(initial.rateLimitLoginMax));
+  const [rateLimitSignupMax, setRateSignup] = useState(String(initial.rateLimitSignupMax));
+  const [rateLimitOtpMax, setRateOtp] = useState(String(initial.rateLimitOtpMax));
+  const [rateLimitWindowSeconds, setRateWindow] = useState(String(initial.rateLimitWindowSeconds));
+  const [requireEmailVerification, setRequireEmail] = useState(initial.requireEmailVerification);
+  const [requirePhoneVerification, setRequirePhone] = useState(initial.requirePhoneVerification);
   const [maintenance, setNote] = useState(initial.maintenance);
   return (
     <form
       className="max-w-lg space-y-3 rounded-xl bg-panel p-4"
       onSubmit={(e) => {
         e.preventDefault();
-        void onSave({ allowSignups, allowEmailSignup, allowPhoneSignup, maxUploadBytes: Number(maxUploadBytes), maintenance });
+        void onSave({ allowSignups, allowEmailSignup, allowPhoneSignup, maxUploadBytes: Number(maxUploadBytes), rateLimitLoginMax: Number(rateLimitLoginMax), rateLimitSignupMax: Number(rateLimitSignupMax), rateLimitOtpMax: Number(rateLimitOtpMax), rateLimitWindowSeconds: Number(rateLimitWindowSeconds), requireEmailVerification, requirePhoneVerification, maintenance });
       }}
     >
       <label className="flex items-center justify-between">
@@ -449,6 +455,21 @@ function SettingsForm({
         <input type="checkbox" checked={allowPhoneSignup} onChange={(e) => setAllowPhone(e.target.checked)} className="size-5" />
       </label>
       <p className="text-xs leading-relaxed text-muted">{locale === "fa" ? "این گزینه‌ها ثبت‌نام جدید هر روش را کنترل می‌کنند؛ ورود کاربران موجود همچنان مجاز است." : "These switches control new registrations. Existing users can still sign in."}</p>
+      <label className="flex items-center justify-between gap-3">
+        <span>{locale === "fa" ? "الزام تأیید ایمیل" : "Require email verification"}</span>
+        <input type="checkbox" checked={requireEmailVerification} onChange={(e) => setRequireEmail(e.target.checked)} className="size-5" />
+      </label>
+      <label className="flex items-center justify-between gap-3">
+        <span>{locale === "fa" ? "الزام تأیید شماره تلفن" : "Require phone verification"}</span>
+        <input type="checkbox" checked={requirePhoneVerification} onChange={(e) => setRequirePhone(e.target.checked)} className="size-5" />
+      </label>
+      <p className="text-xs text-muted">{locale === "fa" ? "سیاست‌های تأیید در دیتابیس ذخیره می‌شوند؛ اعمال کامل روی تمام روش‌های ورود و نشست‌ها هنوز نیازمند تکمیل و آزمون جداگانه است." : "Verification policies are stored; full enforcement across all identity providers and sessions still requires additional implementation and tests."}</p>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block text-sm"><span className="text-muted">{locale === "fa" ? "حد ورود در پنجره" : "Login attempts/window"}</span><input type="number" min={3} max={30} value={rateLimitLoginMax} onChange={(e) => setRateLogin(e.target.value)} className="mt-1 h-10 w-full rounded-lg bg-header px-3" /></label>
+        <label className="block text-sm"><span className="text-muted">{locale === "fa" ? "حد ثبت‌نام" : "Signup attempts/window"}</span><input type="number" min={2} max={15} value={rateLimitSignupMax} onChange={(e) => setRateSignup(e.target.value)} className="mt-1 h-10 w-full rounded-lg bg-header px-3" /></label>
+        <label className="block text-sm"><span className="text-muted">{locale === "fa" ? "حد درخواست OTP" : "OTP attempts/window"}</span><input type="number" min={1} max={8} value={rateLimitOtpMax} onChange={(e) => setRateOtp(e.target.value)} className="mt-1 h-10 w-full rounded-lg bg-header px-3" /></label>
+        <label className="block text-sm"><span className="text-muted">{locale === "fa" ? "پنجره (ثانیه)" : "Window (seconds)"}</span><input type="number" min={30} max={3600} value={rateLimitWindowSeconds} onChange={(e) => setRateWindow(e.target.value)} className="mt-1 h-10 w-full rounded-lg bg-header px-3" /></label>
+      </div>
       <label className="block text-sm">
         <span className="text-muted">{t("maxUpload")}</span>
         <input value={maxUploadBytes} onChange={(e) => setMax(e.target.value)} className="mt-1 h-11 w-full rounded-lg bg-header px-3" />

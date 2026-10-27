@@ -2363,6 +2363,12 @@ export const adminGetSettings = createServerFn({ method: "GET" })
       allowEmailSignup: (await setting(sql, "allow_email_signup", "true")) !== "false",
       allowPhoneSignup: (await setting(sql, "allow_phone_signup", "true")) !== "false",
       maxUploadBytes: Number(await setting(sql, "max_upload_bytes", "2000000")),
+      rateLimitLoginMax: Number(await setting(sql, "rate_limit_login_max", "10")),
+      rateLimitSignupMax: Number(await setting(sql, "rate_limit_signup_max", "5")),
+      rateLimitOtpMax: Number(await setting(sql, "rate_limit_otp_max", "3")),
+      rateLimitWindowSeconds: Number(await setting(sql, "rate_limit_window_seconds", "60")),
+      requireEmailVerification: (await setting(sql, "require_email_verification", "false")) === "true",
+      requirePhoneVerification: (await setting(sql, "require_phone_verification", "false")) === "true",
       maintenance: await setting(sql, "maintenance_message", ""),
     };
   });
@@ -2384,12 +2390,32 @@ export const adminSaveSettings = createServerFn({ method: "POST" })
     if (!Number.isFinite(max)) max = 2_000_000;
     max = Math.min(4_000_000, Math.max(100_000, Math.floor(max)));
     const maintenance = clean(data.maintenance, 240);
+    const bounded = (value: unknown, fallback: number, min: number, maxValue: number) => {
+      const n = Number(value);
+      return Number.isFinite(n) ? Math.min(maxValue, Math.max(min, Math.floor(n))) : fallback;
+    };
+    const rateLogin = bounded(data.rateLimitLoginMax, Number(await setting(sql, "rate_limit_login_max", "10")), 3, 30);
+    const rateSignup = bounded(data.rateLimitSignupMax, Number(await setting(sql, "rate_limit_signup_max", "5")), 2, 15);
+    const rateOtp = bounded(data.rateLimitOtpMax, Number(await setting(sql, "rate_limit_otp_max", "3")), 1, 8);
+    const rateWindow = bounded(data.rateLimitWindowSeconds, Number(await setting(sql, "rate_limit_window_seconds", "60")), 30, 3600);
+    const requireEmailVerification = data.requireEmailVerification === undefined
+      ? (await setting(sql, "require_email_verification", "false")) === "true"
+      : Boolean(data.requireEmailVerification);
+    const requirePhoneVerification = data.requirePhoneVerification === undefined
+      ? (await setting(sql, "require_phone_verification", "false")) === "true"
+      : Boolean(data.requirePhoneVerification);
     const pairs: [string, string][] = [
       ["allow_signups", allow ? "true" : "false"],
       ["allow_email_signup", allowEmail ? "true" : "false"],
       ["allow_phone_signup", allowPhone ? "true" : "false"],
       ["max_upload_bytes", String(max)],
       ["maintenance_message", maintenance],
+      ["rate_limit_login_max", String(rateLogin)],
+      ["rate_limit_signup_max", String(rateSignup)],
+      ["rate_limit_otp_max", String(rateOtp)],
+      ["rate_limit_window_seconds", String(rateWindow)],
+      ["require_email_verification", requireEmailVerification ? "true" : "false"],
+      ["require_phone_verification", requirePhoneVerification ? "true" : "false"],
     ];
     const previous = {
       allowSignups: (await setting(sql, "allow_signups", "true")) !== "false",
@@ -2411,6 +2437,12 @@ export const adminSaveSettings = createServerFn({ method: "POST" })
         allowEmailSignup: allowEmail,
         allowPhoneSignup: allowPhone,
         maxUploadBytes: max,
+        rateLimitLoginMax: rateLogin,
+        rateLimitSignupMax: rateSignup,
+        rateLimitOtpMax: rateOtp,
+        rateLimitWindowSeconds: rateWindow,
+        requireEmailVerification,
+        requirePhoneVerification,
         maintenance,
       },
     });
