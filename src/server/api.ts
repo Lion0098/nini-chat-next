@@ -1325,6 +1325,7 @@ export const removeMember = createServerFn({ method: "POST" })
     if (!target || target.role === "owner") return err("forbidden");
     const profile = await profileOf(sql, data.userId);
     await sql`delete from chat_members where chat_id = ${data.chatId} and user_id = ${data.userId}`;
+    await sql`insert into group_membership_history(chat_id,subject_user_id,actor_user_id,action,old_role) values (${data.chatId},${data.userId},${context.userId},'removed',${target.role})`;
     await systemNote(
       sql,
       data.chatId,
@@ -1365,6 +1366,7 @@ export const leaveGroup = createServerFn({ method: "POST" })
       `;
     }
     await sql`delete from chat_members where chat_id = ${data.chatId} and user_id = ${context.userId}`;
+    await sql`insert into group_membership_history(chat_id,subject_user_id,actor_user_id,action,old_role) values (${data.chatId},${context.userId},${context.userId},'left',${mem.role})`;
     await systemNote(sql, data.chatId, context.userId, `left:${me.display_name}`);
     return ok(true);
   });
@@ -2435,7 +2437,11 @@ export const archiveGroup = createServerFn({ method: "POST" })
     const rows = await sql<{ kind: string }>`select kind from chats where id = ${data.chatId}`;
     if (rows[0]?.kind !== "group") return err("not_found");
     if (!mem || mem.role !== "owner") return err("forbidden");
-    await sql`update chats set archived_at = ${data.archived ? sql`now()` : sql`null`}, updated_at = now() where id = ${data.chatId}`;
+    if (data.archived) {
+      await sql`update chats set archived_at = now(), updated_at = now() where id = ${data.chatId}`;
+    } else {
+      await sql`update chats set archived_at = null, updated_at = now() where id = ${data.chatId}`;
+    }
     await sql`insert into group_membership_history(chat_id, subject_user_id, actor_user_id, action) values (${data.chatId}, ${context.userId}, ${context.userId}, ${data.archived ? "archived" : "unarchived"})`;
     return ok(true);
   });
