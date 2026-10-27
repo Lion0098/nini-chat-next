@@ -64,7 +64,7 @@ export function AdminScreen() {
     queryFn: () => adminGetSettings(),
     enabled: meQ.data?.role === "admin" && tab === "system",
   });
-  const [draft, setDraft] = useState<{ email: string; password: string; displayName: string; username: string } | null>(null);
+  const [draft, setDraft] = useState<{ email: string; displayName: string; username: string } | null>(null);
 
   if (meQ.isLoading) return <div className="grid h-dvh place-items-center bg-shell">{t("appName")}</div>;
   if (!meQ.data || meQ.data.role !== "admin") {
@@ -137,7 +137,7 @@ export function AdminScreen() {
         ) : null}
         {tab === "users" ? (
           <div className="space-y-3">
-            <button type="button" onClick={() => setDraft({ email: "", password: "", displayName: "", username: "" })} className="h-10 rounded-full bg-green px-4 text-sm text-on">
+            <button type="button" onClick={() => setDraft({ email: "", displayName: "", username: "" })} className="h-10 rounded-full bg-green px-4 text-sm text-on">
               {t("createUser")}
             </button>
             {draft ? (
@@ -148,7 +148,7 @@ export function AdminScreen() {
                   void adminCreateUser({ data: draft }).then((res) => {
                     if (!res.ok) toast.error(err(res.error));
                     else {
-                      toast.success(t("userCreated"));
+                      toast.success(locale === "fa" ? "دعوت‌نامه ایمیلی ارسال شد." : "Invitation email sent.");
                       setDraft(null);
                       void qc.invalidateQueries({ queryKey: ["admin-users"] });
                     }
@@ -158,8 +158,7 @@ export function AdminScreen() {
                 <input required placeholder={t("name")} value={draft.displayName} onChange={(e) => setDraft({ ...draft, displayName: e.target.value })} className="h-11 rounded-lg bg-header px-3" />
                 <input required placeholder={t("username")} value={draft.username} onChange={(e) => setDraft({ ...draft, username: e.target.value })} className="h-11 rounded-lg bg-header px-3" />
                 <input required type="email" placeholder={t("email")} value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} className="h-11 rounded-lg bg-header px-3" />
-                <input required type="text" placeholder={t("password")} value={draft.password} onChange={(e) => setDraft({ ...draft, password: e.target.value })} className="h-11 rounded-lg bg-header px-3" />
-                <p className="text-xs text-muted sm:col-span-2">{t("passwordOnce")}</p>
+                <p className="text-xs text-muted sm:col-span-2">{locale === "fa" ? "لینک امن ۴۸ ساعته برای تعیین رمز به ایمیل کاربر ارسال می‌شود؛ مدیر رمز عبور را تعیین یا مشاهده نمی‌کند." : "A secure 48-hour link will be emailed so the user can set their own password. Admins never choose or see it."}</p>
                 <div className="flex gap-2 sm:col-span-2">
                   <button className="h-10 rounded-full bg-green px-4 text-on">{t("create")}</button>
                   <button type="button" onClick={() => setDraft(null)} className="h-10 rounded-full bg-header px-4">{t("cancel")}</button>

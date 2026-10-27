@@ -1,4 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
+import { createHash, randomBytes } from "node:crypto";
+import { sendAdminInvitationEmail } from "@/lib/email/resend";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { getSql, type Sql } from "@/lib/db";
 import type {
@@ -319,6 +321,17 @@ async function requireAuditReader(sql: Sql, userId: string) {
   const assigned = await adminRoleOf(sql, userId);
   if (row.role !== "admin" || !["owner", "administrator", "auditor"].includes(assigned || "")) throw new Error("forbidden");
   return { row, role: assigned as AdminRole };
+}
+
+async function requireAssignedRole(sql: Sql, userId: string, roles: AdminRole[]) {
+  const row = await ensure(sql, userId);
+  const assigned = await adminRoleOf(sql, userId);
+  if (row.role !== "admin" || !assigned || !roles.includes(assigned)) throw new Error("forbidden");
+  return { row, role: assigned };
+}
+
+function invitationHash(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
 }
 
 async function auditAdminEvent(sql: Sql, actorId: string, action: string, targetUserId: string | null = null, details: Record<string, unknown> = {}) {
@@ -2058,36 +2071,124 @@ export const adminCreateUser = createServerFn({ method: "POST" })
     const sql = await getSql();
     await requireAdmin(sql, context.userId);
     const email = clean(data.email, 120).toLowerCase();
-    const password = String(data.password ?? "");
     const displayName = clean(data.displayName, 50);
     const username = clean(data.username, 24).toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return err("invalid_email");
-    if (password.length < 8) return err("weak_password");
     if (!displayName) return err("name_required");
     if (!USERNAME.test(username)) return err("username_invalid");
-    const taken = await sql<{ user_id: string }>`
-      select user_id from profiles where lower(username) = ${username}
-    `;
+    if (!(process.env.BETTER_AUTH_URL?.trim())) return err("invitation_base_url_not_configured");
+    const existing = await sql<{ id: string }>`select id from "user" where lower(email) = ${email} limit 1`;
+    if (existing.length) return err("email_taken");
+    const taken = await sql<{ user_id: string }>`select user_id from profiles where lower(username) = ${username}`;
     if (taken.length) return err("username_taken");
+    const token = randomBytes(32).toString("base64url");
+    const tokenHash = invitationHash(token);
+    const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
+    await sql`insert into admin_invitations (token_hash, email, display_name, username, invited_by, expires_at)
+      values (${tokenHash}, ${email}, ${displayName}, ${username}, ${context.userId}, ${expiresAt})`;
+    const inviteUrl = `${process.env.BETTER_AUTH_URL!.trim().replace(/\/+$/, "")}/login?invite=${encodeURIComponent(token)}`;
+    try {
+      await sendAdminInvitationEmail(email, inviteUrl, displayName);
+    } catch (e) {
+      await sql`delete from admin_invitations where token_hash = ${tokenHash} and accepted_at is null`;
+      const message = e instanceof Error ? e.message : String(e);
+      return err(message.includes("email_delivery_not_configured") ? "email_delivery_not_configured" : "email_delivery_failed");
+    }
+    await auditAdminEvent(sql, context.userId, "user.invitation_sent", null, { email, username, expiresAt });
+    return ok({ email, expiresAt });
+  });
+
+export const redeemAdminInvitation = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input); const token = clean(o.token, 128); const password = String(o.password ?? "");
+    if (!/^[A-Za-z0-9_-]{40,64}$/.test(token) || password.length < 10 || password.length > 128) throw new Error("bad_input");
+    return { token, password };
+  })
+  .handler(async ({ data }) => {
+    const sql = await getSql();
+    const tokenHash = invitationHash(data.token);
+    const rows = await sql<{ email: string; display_name: string; username: string; invited_by: string; expires_at: unknown; accepted_at: unknown }>`
+      select email, display_name, username, invited_by, expires_at, accepted_at
+      from admin_invitations where token_hash = ${tokenHash} limit 1
+    `;
+    const invite = rows[0];
+    if (!invite || invite.accepted_at || !invite.expires_at || new Date(String(invite.expires_at)).getTime() <= Date.now()) return err("invitation_invalid_or_expired");
+    const existing = await sql<{ id: string }>`select id from "user" where lower(email) = ${invite.email} limit 1`;
+    if (existing.length) return err("email_taken");
     const { auth } = await import("@/lib/auth/server");
     try {
-      const created = await auth.api.signUpEmail({
-        body: { email, password, name: displayName, username },
-      });
+      const created = await auth.api.signUpEmail({ body: { email: invite.email, password: data.password, name: invite.display_name, username: invite.username } });
       const userId = created.user.id;
-      await sql`
-        insert into profiles (user_id, username, display_name, role, last_seen_at)
-        values (${userId}, ${username}, ${displayName}, 'user', null)
-        on conflict (user_id) do update set username = ${username}, display_name = ${displayName}
-      `;
-      await auditAdminEvent(sql, context.userId, "user.created", userId, { method: "admin_signup" });
-      return ok({ userId });
+      const claimed = await sql<{ token_hash: string }>`update admin_invitations set accepted_at = now(), accepted_user_id = ${userId}
+        where token_hash = ${tokenHash} and accepted_at is null and expires_at > now() returning token_hash`;
+      if (!claimed.length) {
+        await sql`delete from "session" where "userId" = ${userId}`;
+        await sql`delete from "account" where "userId" = ${userId}`;
+        await sql`delete from "user" where id = ${userId}`;
+        return err("invitation_invalid_or_expired");
+      }
+      await sql`insert into profiles (user_id, username, display_name, role, last_seen_at)
+        values (${userId}, ${invite.username}, ${invite.display_name}, 'user', null)
+        on conflict (user_id) do update set username = excluded.username, display_name = excluded.display_name`;
+      await auditAdminEvent(sql, invite.invited_by, "user.invitation_accepted", userId, { email: invite.email });
+      return ok({ userId, email: invite.email });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       if (/user_username_lower_unique|username.*unique/i.test(message)) return err("username_taken");
       if (/exist|unique|already/i.test(message)) return err("email_taken");
       return err("auth_failed");
     }
+  });
+
+export const moderatorListReports = createServerFn({ method: "GET" })
+  .validator((input: unknown) => ({ status: clean(rec(input ?? {}).status, 16) }))
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    await requireAssignedRole(sql, context.userId, ["owner", "administrator", "moderator"]);
+    const status = ["open", "reviewed", "dismissed"].includes(data.status) ? data.status : "";
+    return await sql<{ id: string; reason: string; details: string | null; status: string; target_user_id: string | null; created_at: unknown }>`
+      select id, reason, details, status, target_user_id, created_at from reports
+      where ${status} = '' or status = ${status} order by created_at desc limit 100`;
+  });
+
+export const moderatorSetReportStatus = createServerFn({ method: "POST" })
+  .validator((input: unknown) => { const o = rec(input); const id = clean(o.id, 80); const status = clean(o.status, 16); if (!id || !["open", "reviewed", "dismissed"].includes(status)) throw new Error("bad_input"); return { id, status }; })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql(); await requireAssignedRole(sql, context.userId, ["owner", "administrator", "moderator"]);
+    const changed = await sql<{ id: string }>`update reports set status = ${data.status} where id = ${data.id} returning id`;
+    if (!changed.length) return err("not_found");
+    await auditAdminEvent(sql, context.userId, "moderation.report_status_changed", null, { reportId: data.id, status: data.status });
+    return ok(true);
+  });
+
+export const supportFindUser = createServerFn({ method: "GET" })
+  .validator((input: unknown) => ({ q: clean(rec(input ?? {}).q, 100).toLowerCase() }))
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql(); await requireAssignedRole(sql, context.userId, ["owner", "administrator", "support"]);
+    if (data.q.length < 3) return [];
+    const like = `%${data.q.replace(/[%_]/g, "")}%`;
+    return await sql<{ id: string; email: string; display_name: string | null; username: string | null; suspended: unknown; created_at: unknown }>`
+      select u.id, u.email, p.display_name, p.username, p.suspended, u."createdAt" as created_at
+      from "user" u left join profiles p on p.user_id = u.id
+      where lower(u.email) like ${like}
+         or lower(coalesce(p.username, '')) like ${like}
+         or lower(coalesce(p.display_name, u.name)) like ${like}
+      order by u."createdAt" desc limit 20`;
+  });
+
+export const supportRevokeUserSessions = createServerFn({ method: "POST" })
+  .validator((input: unknown) => { const userId = clean(rec(input).userId, 80); if (!userId) throw new Error("bad_input"); return { userId }; })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql(); await requireAssignedRole(sql, context.userId, ["owner", "administrator", "support"]);
+    if (data.userId === context.userId) return err("self");
+    const target = await profileOf(sql, data.userId); if (!target) return err("not_found");
+    const rows = await sql<{ id: string }>`delete from "session" where "userId" = ${data.userId} returning id`;
+    await auditAdminEvent(sql, context.userId, "support.sessions_revoked", data.userId, { revokedCount: rows.length });
+    return ok({ revokedCount: rows.length });
   });
 
 export const adminDeleteUser = createServerFn({ method: "POST" })

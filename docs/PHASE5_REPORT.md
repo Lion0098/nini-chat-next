@@ -1,23 +1,18 @@
-# Phase 5 — Admin Security and Console (final implementation pass)
+# Phase 5 — Admin Security and Console (follow-up completion pass)
 
-## Implemented
-- Scoped admin role assignments for owner, administrator, moderator, support and auditor.
-- Explicit owner bootstrap and backend authorization gates for privileged admin APIs.
-- Owner-only role grant/revocation; profile role and explicit assignment remain synchronized; owner cannot be demoted via the console.
-- Dashboard metrics and searchable, read-only audit history.
-- Append-only audit log protected by a database trigger. Credential-like metadata keys are filtered.
-- Audit events for user create/update/delete, role changes/revocation, report status changes, restriction changes/expiry, and session revocation.
-- Reason-required restrictions with optional expiry from 1 hour to 365 days; blank duration means indefinite. Expired restrictions are processed on the restricted user's next authenticated request.
-- Admin UI actions to create/remove restrictions and revoke all sessions for another user.
-- Static invariant tests for migration shape, auth gates, audit protection, UI wiring, role consistency, restrictions, expiry and session revocation.
+## Implemented on `phase5/admin-security-console`
+- Explicit owner/administrator/moderator/support/auditor role assignments, owner-only role grants, protected owner, server-side gates on legacy full-admin operations, and profile-role synchronization.
+- Dashboard, searchable read-only audit history, append-only audit log, reasoned temporary/permanent restrictions, lazy expiry on the restricted user's next authenticated request, and session revocation.
+- Secure admin-created invitation flow: administrator submits name, username, and email; a cryptographically random one-time token is generated, only its SHA-256 hash is stored, and the invitation link expires after 48 hours. Email delivery uses the existing Resend-compatible server integration. The invitee sets their own password; the administrator never supplies or sees it. Redemption validates expiry and claims the invitation before linking it to the created account.
+- Dedicated least-privilege APIs: moderators can list and change report status; support can perform limited user lookup and revoke sessions. These roles are not authorized to call legacy full-console mutation endpoints.
+- Static invariants expanded for invitations and scoped role endpoints; migration `0007_admin_invitations.sql` added.
 
-## Remaining limitations
-- User creation still uses the existing admin-created password flow; email-delivered, expiring invitation/set-password is not implemented because no mail-delivery integration is configured for this phase.
-- Moderator/support roles can be assigned but do not yet have separate narrowly scoped moderation/support APIs; they cannot use legacy full-admin mutation APIs.
-- Restriction expiry is lazy (processed at the restricted user's next authenticated request), not driven by a background scheduler.
+## Configuration and operational requirements
+- Set `BETTER_AUTH_URL` to the canonical public HTTPS origin and configure `RESEND_API_KEY` plus `RESEND_FROM_EMAIL` before sending invitations. If delivery is not configured or fails, the invitation is removed and the API returns an error rather than reporting success.
+- Invitation emails and actual signup cannot be live-tested without valid external email-provider credentials.
+- Restriction expiry is still lazy (processed on the restricted user's next authenticated request), not a background scheduler.
 
-## Verification
-- `node --check` passed for `scripts/admin-security-phase5.test.mjs`.
-- Static invariant tests passed in the isolated workbench: 7 unique tests.
-- Full project test suite, TypeScript typecheck, production build, and execution of migration against PostgreSQL/PGlite could not be run because the isolated workbench does not have the project dependencies installed (`typescript` and `@electric-sql/pglite` are unavailable).
-- No production database was changed. Do not merge this branch until the full project checks pass in CI or a configured development environment.
+## Verification status
+- Static invariant suite: **9/9 tests passed** using Node's test runner against the updated source fixture.
+- Full project test suite, TypeScript typecheck, production build, and applying migrations against PostgreSQL/PGlite still require a dependency-installed environment; these checks are not claimed as passed by this isolated edit pass.
+- No production database was modified and no changes were merged to `main`.

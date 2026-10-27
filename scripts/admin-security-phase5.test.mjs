@@ -33,7 +33,7 @@ test("dashboard, audit reader and role assignment APIs require backend authoriza
 });
 
 test("sensitive account changes emit audit events without logging password values", () => {
-  for (const action of ["user.updated", "user.created", "user.deleted", "report.status_changed", "admin.role_changed"]) assert.ok(api.includes(action), `missing ${action}`);
+  for (const action of ["user.updated", "user.invitation_sent", "user.invitation_accepted", "user.deleted", "report.status_changed", "admin.role_changed"]) assert.ok(api.includes(action), `missing ${action}`);
   assert.ok(!api.includes("auditAdminEvent(sql, context.userId, \"user.created\", userId, { password"));
 });
 
@@ -67,3 +67,34 @@ test("reasoned restrictions support expiration and session revocation with audit
   assert.match(adminUi, /adminSetUserRestriction/);
   assert.match(adminUi, /adminRevokeUserSessions/);
 });
+
+
+test("admin-created accounts use hashed, expiring, single-use email invitations", () => {
+  const invitationMigration = read("migrations/0007_admin_invitations.sql");
+  const mail = read("src/lib/email/resend.ts");
+  const login = read("src/routes/login.tsx");
+  assert.match(invitationMigration, /token_hash text PRIMARY KEY/);
+  assert.match(invitationMigration, /expires_at timestamptz NOT NULL/);
+  assert.match(invitationMigration, /accepted_at timestamptz/);
+  assert.match(api, /randomBytes\(32\)\.toString\("base64url"\)/);
+  assert.match(api, /createHash\("sha256"\)/);
+  assert.match(api, /48 \* 60 \* 60 \* 1000/);
+  assert.match(api, /export const redeemAdminInvitation/);
+  assert.match(api, /accepted_at is null and expires_at > now\(\) returning token_hash/);
+  assert.match(mail, /sendAdminInvitationEmail/);
+  assert.match(login, /redeemAdminInvitation/);
+  assert.doesNotMatch(adminUi, /draft\.password/);
+});
+
+test("moderator and support endpoints enforce their own least-privilege roles", () => {
+  assert.match(api, /export const moderatorListReports[\s\S]*?requireAssignedRole\(sql, context\.userId, \["owner", "administrator", "moderator"\]\)/);
+  assert.match(api, /export const moderatorSetReportStatus[\s\S]*?requireAssignedRole\(sql, context\.userId, \["owner", "administrator", "moderator"\]\)/);
+  assert.match(api, /export const supportFindUser[\s\S]*?requireAssignedRole\(sql, context\.userId, \["owner", "administrator", "support"\]\)/);
+  assert.match(api, /export const supportRevokeUserSessions[\s\S]*?requireAssignedRole\(sql, context\.userId, \["owner", "administrator", "support"\]\)/);
+  assert.match(api, /if \(row\.role !== "admin" \|\| !assigned \|\| !roles\.includes\(assigned\)\) throw new Error\("forbidden"\)/);
+});
+
+
+
+
+

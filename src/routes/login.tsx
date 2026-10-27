@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createFileRoute, Navigate, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -6,7 +6,7 @@ import { GROK_PROVIDERS, authClient, authEnabled, signIn } from "@/lib/auth/clie
 import { RedirectToSignIn } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { usePrefs } from "@/lib/prefs";
-import { getPublicConfig } from "@/server/api";
+import { getPublicConfig, redeemAdminInvitation } from "@/server/api";
 import { normalizeIranPhone } from "@/lib/phone";
 
 export const Route = createFileRoute("/login")({ component: LoginPage });
@@ -27,12 +27,34 @@ function LoginPage() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
+  const [inviteToken, setInviteToken] = useState("");
+  const [invitePassword, setInvitePassword] = useState("");
+  const [inviteConfirm, setInviteConfirm] = useState("");
+
+  useEffect(() => {
+    const token = new URLSearchParams(window.location.search).get("invite") ?? "";
+    if (token) setInviteToken(token);
+  }, []);
 
   if (isPending) {
     return <div className="grid h-dvh place-items-center bg-shell text-sm text-muted">{t("appName")}</div>;
   }
   if (user) return <Navigate to="/" />;
   if (!authEnabled) return <RedirectToSignIn to="/" />;
+  if (inviteToken) return <main className="grid min-h-dvh place-items-center bg-shell p-4 text-ink"><form className="w-full max-w-md space-y-3 rounded-2xl bg-panel p-6" onSubmit={async (e) => {
+    e.preventDefault();
+    if (invitePassword.length < 10) { toast.error(locale === "fa" ? "رمز باید حداقل ۱۰ نویسه باشد." : "Password must be at least 10 characters."); return; }
+    if (invitePassword !== inviteConfirm) { toast.error(t("passwordMismatch")); return; }
+    setBusy(true);
+    try {
+      const result = await redeemAdminInvitation({ data: { token: inviteToken, password: invitePassword } });
+      if (!result.ok) { toast.error(locale === "fa" ? "دعوت‌نامه نامعتبر، منقضی یا قبلاً استفاده شده است." : "Invitation is invalid, expired, or already used."); return; }
+      const signed = await authClient.signIn.email({ email: result.data.email, password: invitePassword });
+      if (signed.error) { toast.success(locale === "fa" ? "حساب ساخته شد؛ حالا با ایمیل دعوت‌شده و رمز انتخابی وارد شو." : "Account created. Sign in with the invited email and chosen password."); await navigate({ to: "/login", replace: true }); return; }
+      await navigate({ to: "/" });
+    } catch { toast.error(locale === "fa" ? "تکمیل دعوت‌نامه انجام نشد؛ لینک را بررسی کن." : "Could not complete invitation. Check the link and try again."); }
+    finally { setBusy(false); }
+  }}><h1 className="text-xl font-semibold">{locale === "fa" ? "تکمیل دعوت‌نامه نی‌نی چت" : "Accept Nini Chat invitation"}</h1><p className="text-sm text-muted">{locale === "fa" ? "ایمیل دعوت‌نامه را وارد کن و رمز جدیدی بساز. لینک فقط یک‌بار و تا ۴۸ ساعت معتبر است." : "Enter the invited email and choose a password. This link is single-use and expires in 48 hours."}</p><Lab label={t("password")} value={invitePassword} onChange={setInvitePassword} type="password" autoComplete="new-password"/><Lab label={t("confirmPassword")} value={inviteConfirm} onChange={setInviteConfirm} type="password" autoComplete="new-password"/><button disabled={busy} className="h-11 w-full rounded-full bg-green text-on disabled:opacity-60">{busy ? (locale === "fa" ? "لطفاً صبر کن…" : "Please wait…") : (locale === "fa" ? "ساخت حساب و ورود" : "Create account & sign in")}</button></form></main>;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
