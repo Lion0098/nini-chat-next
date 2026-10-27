@@ -55,6 +55,11 @@ Acceptance criteria: normal users cannot call admin APIs; privileged mutations a
 Define distinct group and channel permission models. Add create/edit/archive, owners/admins, invitations, visibility, join permissions, and ownership transfer. Record join/leave, role changes, removals, and admin interventions. Test role boundaries and unauthorized membership changes.
 Acceptance criteria: group/channel flows work end-to-end; membership history is queryable and correctly attributed; unauthorized role changes are rejected.
 
+### Phase 6 implementation checkpoint
+- Added migration `0008_phase6_groups_channels.sql` for group lifecycle metadata, invitations, append-only-style membership history records, and a separate channel/member/post schema.
+- Added protected APIs for group visibility/join policy, archive/unarchive, ownership transfer, invitation issue/response, membership history, channel creation/list/join/publish/read, channel role changes, channel ownership transfer, and channel membership history.
+- Full browser UI integration, real database migration execution, typecheck, and production build remain acceptance checks; do not mark Phase 6 fully accepted until those are run.
+
 ## Phase 7 — Platform settings, moderation, and operations
 Add admin controls for registration methods, mandatory verification, safe rate limits, maintenance mode, feature flags, upload limits, and announcements. Add reports, moderation queue, appeals/notes, and role-limited content access. Add health/metrics for API, database, storage, SMS/email status, errors, and backup freshness. Add log retention, privacy-aware exports, backup/restore drills, and alerts. Switching SMS.ir to Production requires owner-level confirmation.
 Acceptance criteria: settings are validated, audited, and enforced server-side; credentials are not displayed; restore drill and basic operational checks succeed.

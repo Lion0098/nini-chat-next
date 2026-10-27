@@ -2397,3 +2397,252 @@ export const adminSaveSettings = createServerFn({ method: "POST" })
     }
     return ok(true);
   });
+
+
+// Phase 6: group lifecycle, auditable membership changes, and separate channels.
+export const setGroupPolicy = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input);
+    const chatId = clean(o.chatId, 80);
+    const visibility = clean(o.visibility, 16);
+    const joinPolicy = clean(o.joinPolicy, 16);
+    if (!chatId || !["private", "public"].includes(visibility) || !["invite", "approval", "open"].includes(joinPolicy)) throw new Error("bad_input");
+    return { chatId, visibility, joinPolicy };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    await gate(sql, context.userId);
+    const mem = await memberRole(sql, data.chatId, context.userId);
+    const rows = await sql<{ kind: string }>`select kind from chats where id = ${data.chatId}`;
+    if (rows[0]?.kind !== "group") return err("not_found");
+    if (!mem || !["owner", "admin"].includes(mem.role)) return err("forbidden");
+    if (mem.role !== "owner" && data.joinPolicy !== "invite") return err("owner_only");
+    await sql`update chats set visibility = ${data.visibility}, join_policy = ${data.joinPolicy}, updated_at = now() where id = ${data.chatId}`;
+    return ok(true);
+  });
+
+export const archiveGroup = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input); const chatId = clean(o.chatId, 80);
+    if (!chatId) throw new Error("bad_input");
+    return { chatId, archived: Boolean(o.archived) };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql(); await gate(sql, context.userId);
+    const mem = await memberRole(sql, data.chatId, context.userId);
+    const rows = await sql<{ kind: string }>`select kind from chats where id = ${data.chatId}`;
+    if (rows[0]?.kind !== "group") return err("not_found");
+    if (!mem || mem.role !== "owner") return err("forbidden");
+    await sql`update chats set archived_at = ${data.archived ? sql`now()` : sql`null`}, updated_at = now() where id = ${data.chatId}`;
+    await sql`insert into group_membership_history(chat_id, subject_user_id, actor_user_id, action) values (${data.chatId}, ${context.userId}, ${context.userId}, ${data.archived ? "archived" : "unarchived"})`;
+    return ok(true);
+  });
+
+export const transferGroupOwnership = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input); const chatId = clean(o.chatId, 80); const userId = clean(o.userId, 80);
+    if (!chatId || !userId || userId === "") throw new Error("bad_input");
+    return { chatId, userId };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql(); await gate(sql, context.userId);
+    const actor = await memberRole(sql, data.chatId, context.userId);
+    const target = await memberRole(sql, data.chatId, data.userId);
+    const rows = await sql<{ kind: string }>`select kind from chats where id = ${data.chatId}`;
+    if (rows[0]?.kind !== "group") return err("not_found");
+    if (!actor || actor.role !== "owner" || !target || data.userId === context.userId) return err("forbidden");
+    await sql`update chat_members set role = 'admin' where chat_id = ${data.chatId} and user_id = ${context.userId}`;
+    await sql`update chat_members set role = 'owner' where chat_id = ${data.chatId} and user_id = ${data.userId}`;
+    await sql`insert into group_membership_history(chat_id, subject_user_id, actor_user_id, action, old_role, new_role) values (${data.chatId}, ${data.userId}, ${context.userId}, 'ownership_transferred', ${target.role}, 'owner')`;
+    await sql`update chats set updated_at = now() where id = ${data.chatId}`;
+    return ok(true);
+  });
+
+export const inviteGroupMember = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input); const chatId = clean(o.chatId, 80); const userId = clean(o.userId, 80);
+    if (!chatId || !userId) throw new Error("bad_input");
+    return { chatId, userId };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql(); await gate(sql, context.userId);
+    const actor = await memberRole(sql, data.chatId, context.userId);
+    const group = await sql<{ kind: string }>`select kind from chats where id = ${data.chatId}`;
+    if (group[0]?.kind !== "group") return err("not_found");
+    if (!actor || !["owner", "admin"].includes(actor.role)) return err("forbidden");
+    const target = await profileOf(sql, data.userId);
+    if (!target || bool(target.suspended) || data.userId === context.userId) return err("not_found");
+    if (await blockedEither(sql, context.userId, data.userId)) return err("blocked");
+    const id = crypto.randomUUID();
+    await sql`insert into group_invitations(id,chat_id,invited_user_id,invited_by,expires_at) values (${id},${data.chatId},${data.userId},${context.userId},now()+interval '7 days') on conflict(chat_id,invited_user_id,accepted_at) do nothing`;
+    await sql`insert into group_membership_history(chat_id,subject_user_id,actor_user_id,action,details) values (${data.chatId},${data.userId},${context.userId},'added',jsonb_build_object('invitationId',${id}))`;
+    return ok({ id });
+  });
+
+export const respondGroupInvitation = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input); const invitationId = clean(o.invitationId, 80); const accept = Boolean(o.accept);
+    if (!invitationId) throw new Error("bad_input");
+    return { invitationId, accept };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql(); await gate(sql, context.userId);
+    const rows = await sql<{ id: string; chat_id: string; invited_by: string }>`select id,chat_id,invited_by from group_invitations where id = ${data.invitationId} and invited_user_id = ${context.userId} and accepted_at is null and expires_at > now()`;
+    const invite = rows[0]; if (!invite) return err("not_found");
+    if (!data.accept) {
+      await sql`delete from group_invitations where id = ${invite.id}`;
+      return ok(true);
+    }
+    if (await blockedEither(sql, context.userId, invite.invited_by)) return err("blocked");
+    await sql`insert into chat_members(chat_id,user_id,role) values (${invite.chat_id},${context.userId},'member') on conflict do nothing`;
+    await sql`update group_invitations set accepted_at = now() where id = ${invite.id}`;
+    await sql`insert into group_membership_history(chat_id,subject_user_id,actor_user_id,action) values (${invite.chat_id},${context.userId},${context.userId},'joined')`;
+    return ok(true);
+  });
+
+export const getGroupMembershipHistory = createServerFn({ method: "GET" })
+  .validator((input: unknown) => {
+    const o = rec(input); const chatId = clean(o.chatId, 80);
+    const limit = Math.max(1, Math.min(100, Number(o.limit) || 50));
+    if (!chatId) throw new Error("bad_input");
+    return { chatId, limit };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql(); await gate(sql, context.userId);
+    const member = await memberRole(sql, data.chatId, context.userId);
+    if (!member || !["owner", "admin"].includes(member.role)) return err("forbidden");
+    const rows = await sql<{ id: number; subject_user_id: string; actor_user_id: string | null; action: string; old_role: string | null; new_role: string | null; details: unknown; created_at: unknown }>`select id,subject_user_id,actor_user_id,action,old_role,new_role,details,created_at from group_membership_history where chat_id = ${data.chatId} order by created_at desc,id desc limit ${data.limit}`;
+    return ok(rows.map(r => ({ id: r.id, subjectUserId: r.subject_user_id, actorUserId: r.actor_user_id, action: r.action, oldRole: r.old_role, newRole: r.new_role, details: r.details, createdAt: iso(r.created_at) })));
+  });
+
+// Channels have their own tables and permissions; subscribers cannot publish or manage members.
+export const createChannel = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input); const title = clean(o.title, 80); const about = clean(o.about, 300);
+    const visibility = clean(o.visibility ?? "private", 16); const joinPolicy = clean(o.joinPolicy ?? "invite", 16);
+    if (!title || !["private", "public"].includes(visibility) || !["invite", "approval", "open"].includes(joinPolicy)) throw new Error("bad_input");
+    return { title, about, visibility, joinPolicy };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql(); const me = await gate(sql, context.userId);
+    const id = crypto.randomUUID();
+    await sql`insert into channels(id,title,about,owner_id,visibility,join_policy) values (${id},${data.title},${data.about},${context.userId},${data.visibility},${data.joinPolicy})`;
+    await sql`insert into channel_members(channel_id,user_id,role) values (${id},${context.userId},'owner')`;
+    await sql`insert into channel_membership_history(channel_id,subject_user_id,actor_user_id,action,new_role) values (${id},${context.userId},${context.userId},'joined','owner')`;
+    return ok({ id, owner: me.user_id });
+  });
+
+export const listMyChannels = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const sql = await getSql(); await gate(sql, context.userId);
+    return sql<{ id: string; title: string; about: string; role: string; visibility: string; joinPolicy: string; createdAt: string; updatedAt: string }>`select c.id,c.title,c.about,cm.role,c.visibility,c.join_policy as "joinPolicy",c.created_at as "createdAt",c.updated_at as "updatedAt" from channels c join channel_members cm on cm.channel_id=c.id where cm.user_id=${context.userId} and c.archived_at is null order by c.updated_at desc limit 100`;
+  });
+
+export const joinPublicChannel = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input); const channelId = clean(o.channelId, 80);
+    if (!channelId) throw new Error("bad_input");
+    return { channelId };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql(); await gate(sql, context.userId);
+    const rows = await sql<{ id: string; visibility: string; join_policy: string; archived_at: unknown }>`select id,visibility,join_policy,archived_at from channels where id=${data.channelId}`;
+    const channel = rows[0];
+    if (!channel || channel.archived_at || channel.visibility !== "public" || channel.join_policy !== "open") return err("not_found");
+    await sql`insert into channel_members(channel_id,user_id,role) values (${data.channelId},${context.userId},'subscriber') on conflict do nothing`;
+    await sql`insert into channel_membership_history(channel_id,subject_user_id,actor_user_id,action,new_role) values (${data.channelId},${context.userId},${context.userId},'joined','subscriber')`;
+    return ok(true);
+  });
+
+export const publishChannelPost = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input); const channelId = clean(o.channelId, 80); const body = clean(o.body, 4000);
+    if (!channelId || !body) throw new Error("bad_input");
+    return { channelId, body };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql(); await gate(sql, context.userId);
+    const members = await sql<{ role: string }>`select role from channel_members where channel_id=${data.channelId} and user_id=${context.userId}`;
+    const role = members[0]?.role;
+    if (!role) return err("forbidden");
+    if (!["owner", "admin", "editor"].includes(role)) return err("forbidden");
+    const id = crypto.randomUUID();
+    await sql`insert into channel_posts(id,channel_id,author_id,body) values (${id},${data.channelId},${context.userId},${data.body})`;
+    await sql`update channels set updated_at=now() where id=${data.channelId}`;
+    return ok({ id });
+  });
+
+export const listChannelPosts = createServerFn({ method: "GET" })
+  .validator((input: unknown) => {
+    const o = rec(input); const channelId = clean(o.channelId, 80); const before = clean(o.before, 80);
+    if (!channelId) throw new Error("bad_input");
+    return { channelId, before };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql(); await gate(sql, context.userId);
+    const members = await sql<{ role: string }>`select role from channel_members where channel_id=${data.channelId} and user_id=${context.userId}`;
+    if (!members[0]) return err("forbidden");
+    const rows = await sql<{ id: string; author_id: string; body: string; created_at: unknown; edited_at: unknown }>`select id,author_id,body,created_at,edited_at from channel_posts where channel_id=${data.channelId} and deleted_at is null and (${data.before} = '' or created_at < (select created_at from channel_posts where id=${data.before} and channel_id=${data.channelId})) order by created_at desc,id desc limit 50`;
+    return ok(rows.map(r => ({ id:r.id, authorId:r.author_id, body:r.body, createdAt:iso(r.created_at), editedAt:iso(r.edited_at) })));
+  });
+
+export const setChannelMemberRole = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input); const channelId = clean(o.channelId, 80); const userId = clean(o.userId, 80); const role = clean(o.role, 20);
+    if (!channelId || !userId || !["admin","editor","subscriber"].includes(role)) throw new Error("bad_input");
+    return { channelId, userId, role };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql(); await gate(sql, context.userId);
+    const actor = await sql<{ role: string }>`select role from channel_members where channel_id=${data.channelId} and user_id=${context.userId}`;
+    const target = await sql<{ role: string }>`select role from channel_members where channel_id=${data.channelId} and user_id=${data.userId}`;
+    if (actor[0]?.role !== "owner" || !target[0] || target[0].role === "owner" || data.userId === context.userId) return err("forbidden");
+    await sql`update channel_members set role=${data.role} where channel_id=${data.channelId} and user_id=${data.userId}`;
+    await sql`insert into channel_membership_history(channel_id,subject_user_id,actor_user_id,action,old_role,new_role) values (${data.channelId},${data.userId},${context.userId},'role_changed',${target[0].role},${data.role})`;
+    return ok(true);
+  });
+
+export const transferChannelOwnership = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input); const channelId = clean(o.channelId, 80); const userId = clean(o.userId, 80);
+    if (!channelId || !userId) throw new Error("bad_input");
+    return { channelId, userId };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql(); await gate(sql, context.userId);
+    const channel = await sql<{ owner_id: string }>`select owner_id from channels where id=${data.channelId}`;
+    const target = await sql<{ role: string }>`select role from channel_members where channel_id=${data.channelId} and user_id=${data.userId}`;
+    if (channel[0]?.owner_id !== context.userId || !target || !target[0] || data.userId === context.userId) return err("forbidden");
+    await sql`update channels set owner_id=${data.userId},updated_at=now() where id=${data.channelId}`;
+    await sql`update channel_members set role='admin' where channel_id=${data.channelId} and user_id=${context.userId}`;
+    await sql`update channel_members set role='owner' where channel_id=${data.channelId} and user_id=${data.userId}`;
+    await sql`insert into channel_membership_history(channel_id,subject_user_id,actor_user_id,action,old_role,new_role) values (${data.channelId},${data.userId},${context.userId},'ownership_transferred',${target[0].role},'owner')`;
+    return ok(true);
+  });
+
+export const getChannelMembershipHistory = createServerFn({ method: "GET" })
+  .validator((input: unknown) => {
+    const o = rec(input); const channelId = clean(o.channelId, 80);
+    if (!channelId) throw new Error("bad_input");
+    return { channelId };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql(); await gate(sql, context.userId);
+    const actor = await sql<{ role: string }>`select role from channel_members where channel_id=${data.channelId} and user_id=${context.userId}`;
+    if (!actor[0] || !["owner","admin"].includes(actor[0].role)) return err("forbidden");
+    return ok(await sql`select id,subject_user_id as "subjectUserId",actor_user_id as "actorUserId",action,old_role as "oldRole",new_role as "newRole",created_at as "createdAt" from channel_membership_history where channel_id=${data.channelId} order by created_at desc,id desc limit 100`);
+  });
