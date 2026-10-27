@@ -20,10 +20,16 @@ async function enforceAuthRateLimit(request: Request, path: string): Promise<Res
       ? Math.min(8, Math.max(1, Number(await setting("rate_limit_otp_max", "3")) || 3))
       : Math.min(15, Math.max(2, Number(await setting("rate_limit_signup_max", "5")) || 5));
   // Prefer the reverse proxy's canonical client IP; never use the full request URL or credentials in the key.
-  const ip = request.headers.get("x-real-ip")?.trim()
-    || request.headers.get("cf-connecting-ip")?.trim()
-    || "unknown";
-  const digest = createHash("sha256").update(`${path}: ${ip}`).digest("hex");
+  const trustedIp = request.headers.get("x-real-ip")?.trim()
+    || request.headers.get("cf-connecting-ip")?.trim();
+  // If no trusted proxy IP is available, avoid putting every visitor in one global bucket.
+  // Configure a trusted reverse proxy in production; this fallback is only a coarse fingerprint.
+  const fallbackFingerprint = [
+    request.headers.get("user-agent")?.slice(0, 200) || "no-agent",
+    request.headers.get("accept-language")?.slice(0, 80) || "no-language",
+  ].join("|");
+  const clientKey = trustedIp || `fallback:${fallbackFingerprint}`;
+  const digest = createHash("sha256").update(`${path}: ${clientKey}`).digest("hex");
   const rows = await sql<{ attempts: number; window_started_at: unknown }>`
     insert into auth_rate_limit_buckets(bucket_key, window_started_at, attempts, updated_at)
     values (${digest}, now(), 1, now())
