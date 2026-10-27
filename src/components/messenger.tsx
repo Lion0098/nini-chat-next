@@ -27,7 +27,7 @@ import { EMOJIS, downloadBase64, fileToBase64, resizeImage } from "@/lib/files";
 import { bytesLabel, formatChatTime, formatClock, formatDay, formatLastSeen } from "@/lib/format";
 import { usePrefs, type CopyKey } from "@/lib/prefs";
 import {
-  addMembers,
+  inviteGroupMember,
   createGroup,
   deleteMessage,
   deleteStatus,
@@ -1491,9 +1491,10 @@ function InfoPane({
                 key={p.userId}
                 type="button"
                 className="block w-full rounded-lg px-2 py-2 text-start hover:bg-hover"
-                onClick={() => void addMembers({ data: { chatId: thread.chat.id, memberIds: [p.userId] } }).then(() => {
+                onClick={() => void inviteGroupMember({ data: { chatId: thread.chat.id, userId: p.userId } }).then((res) => {
+                  if (!res.ok) toast.error(err(res.error));
+                  else toast.success(locale === "fa" ? "دعوت‌نامه گروه ارسال شد." : "Group invitation created.");
                   setAddQ("");
-                  void qc.invalidateQueries({ queryKey: ["messages", thread.chat.id] });
                 })}
               >
                 {p.displayName}
