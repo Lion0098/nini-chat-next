@@ -2754,3 +2754,167 @@ export const archiveChannel = createServerFn({ method: "POST" })
     await sql`insert into channel_membership_history(channel_id,subject_user_id,actor_user_id,action) values (${data.channelId},${context.userId},${context.userId},${data.archived ? "archived" : "unarchived"})`;
     return ok(true);
   });
+
+
+// Phase 7 operations: announcements, moderation case notes, appeals and safe health checks.
+export const adminListAnnouncements = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const sql = await getSql();
+    await requireAdmin(sql, context.userId);
+    const rows = await sql<{ id: number; title: string; body: string; active: boolean; created_at: unknown }>`
+      select id, title, body, active, created_at from system_announcements
+      order by created_at desc limit 100
+    `;
+    return rows.map((r) => ({ id: Number(r.id), title: r.title, body: r.body, active: r.active, createdAt: iso(r.created_at) ?? "" }));
+  });
+
+export const adminCreateAnnouncement = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input);
+    const title = clean(o.title, 160);
+    const body = clean(o.body, 4000);
+    if (!title || !body) throw new Error("bad_input");
+    return { title, body, active: o.active !== false };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    await requireAdmin(sql, context.userId);
+    const rows = await sql<{ id: number }>`
+      insert into system_announcements(title, body, active, created_by)
+      values (${data.title}, ${data.body}, ${data.active}, ${context.userId}) returning id
+    `;
+    await auditAdminEvent(sql, context.userId, "system.announcement_created", null, { announcementId: Number(rows[0]?.id), active: data.active });
+    return ok({ id: Number(rows[0]?.id) });
+  });
+
+export const adminSetAnnouncementActive = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input);
+    const id = Number(o.id);
+    if (!Number.isSafeInteger(id) || id < 1 || typeof o.active !== "boolean") throw new Error("bad_input");
+    return { id, active: o.active };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    await requireAdmin(sql, context.userId);
+    await sql`update system_announcements set active = ${data.active}, updated_at = now() where id = ${data.id}`;
+    await auditAdminEvent(sql, context.userId, "system.announcement_status_changed", null, { announcementId: data.id, active: data.active });
+    return ok(true);
+  });
+
+export const addModerationReportNote = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input);
+    const reportId = clean(o.reportId, 80);
+    const note = clean(o.note, 2000);
+    if (!reportId || !note) throw new Error("bad_input");
+    return { reportId, note };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    await requireAssignedRole(sql, context.userId, ["owner", "administrator", "moderator"]);
+    const exists = await sql<{ id: string }>`select id from reports where id = ${data.reportId} limit 1`;
+    if (!exists.length) return err("not_found");
+    await sql`insert into moderation_report_notes(report_id, author_user_id, note) values (${data.reportId}, ${context.userId}, ${data.note})`;
+    await auditAdminEvent(sql, context.userId, "moderation.report_note_added", null, { reportId: data.reportId });
+    return ok(true);
+  });
+
+export const listModerationReportNotes = createServerFn({ method: "GET" })
+  .validator((input: unknown) => {
+    const o = rec(input); const reportId = clean(o.reportId, 80);
+    if (!reportId) throw new Error("bad_input");
+    return { reportId };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    await requireAssignedRole(sql, context.userId, ["owner", "administrator", "moderator", "auditor"]);
+    const rows = await sql<{ id: number; author_user_id: string; note: string; created_at: unknown }>`
+      select id, author_user_id, note, created_at from moderation_report_notes
+      where report_id = ${data.reportId} order by created_at asc, id asc limit 200
+    `;
+    return rows.map((r) => ({ id: Number(r.id), authorId: r.author_user_id, note: r.note, createdAt: iso(r.created_at) ?? "" }));
+  });
+
+export const submitModerationAppeal = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input); const reason = clean(o.reason, 2000);
+    const restrictionId = o.restrictionId == null ? null : Number(o.restrictionId);
+    if (reason.length < 10 || (restrictionId !== null && (!Number.isSafeInteger(restrictionId) || restrictionId < 1))) throw new Error("bad_input");
+    return { reason, restrictionId };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    const restriction = data.restrictionId === null ? [] : await sql<{ id: number }>`
+      select id from admin_user_restrictions where id = ${data.restrictionId} and user_id = ${context.userId} limit 1
+    `;
+    if (data.restrictionId !== null && !restriction.length) return err("not_found");
+    const open = await sql<{ id: number }>`
+      select id from moderation_appeals where user_id = ${context.userId} and status in ('open','reviewing') limit 1
+    `;
+    if (open.length) return err("appeal_already_open");
+    const rows = await sql<{ id: number }>`
+      insert into moderation_appeals(user_id, restriction_id, reason)
+      values (${context.userId}, ${data.restrictionId}, ${data.reason}) returning id
+    `;
+    return ok({ id: Number(rows[0]?.id) });
+  });
+
+export const adminListModerationAppeals = createServerFn({ method: "GET" })
+  .validator((input: unknown) => {
+    const o = rec(input); const status = clean(o.status, 16);
+    if (status && !["open","reviewing","accepted","rejected"].includes(status)) throw new Error("bad_input");
+    return { status };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    await requireAssignedRole(sql, context.userId, ["owner", "administrator", "moderator", "auditor"]);
+    const rows = await sql<{ id: number; user_id: string; reason: string; status: string; reviewer_note: string | null; created_at: unknown }>`
+      select id, user_id, reason, status, reviewer_note, created_at from moderation_appeals
+      where (${data.status} = '' or status = ${data.status}) order by created_at asc limit 200
+    `;
+    return rows.map((r) => ({ id: Number(r.id), userId: r.user_id, reason: r.reason, status: r.status, reviewerNote: r.reviewer_note, createdAt: iso(r.created_at) ?? "" }));
+  });
+
+export const adminReviewModerationAppeal = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input); const id = Number(o.id); const status = clean(o.status, 16); const note = clean(o.note, 2000);
+    if (!Number.isSafeInteger(id) || id < 1 || !["reviewing","accepted","rejected"].includes(status)) throw new Error("bad_input");
+    if (status !== "reviewing" && note.length < 3) throw new Error("review_note_required");
+    return { id, status, note };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    await requireAssignedRole(sql, context.userId, ["owner", "administrator", "moderator"]);
+    await sql`update moderation_appeals set status = ${data.status}, reviewer_user_id = ${context.userId}, reviewer_note = ${data.note || null}, reviewed_at = case when ${data.status} in ('accepted','rejected') then now() else null end where id = ${data.id}`;
+    await auditAdminEvent(sql, context.userId, "moderation.appeal_reviewed", null, { appealId: data.id, status: data.status });
+    return ok(true);
+  });
+
+export const adminGetOperationalStatus = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const sql = await getSql();
+    await requireAssignedRole(sql, context.userId, ["owner", "administrator", "auditor"]);
+    const checks: { name: string; status: "ok" | "warning" | "error"; detail: string }[] = [];
+    try {
+      await sql`select 1 as ready`;
+      checks.push({ name: "database", status: "ok", detail: "Database query succeeded." });
+    } catch {
+      checks.push({ name: "database", status: "error", detail: "Database query failed." });
+    }
+    const rows = await sql<{ count: number }>`select count(*)::int as count from "user"`;
+    checks.push({ name: "database_users_query", status: "ok", detail: `User count query succeeded (${rows[0]?.count ?? 0} records).` });
+    const active = await sql<{ count: number }>`select count(*)::int as count from system_announcements where active = true`;
+    checks.push({ name: "announcements", status: "ok", detail: `${active[0]?.count ?? 0} active announcements.` });
+    await sql`insert into ops_check_events(check_name, status, details) values ('admin_operational_status', 'ok', ${JSON.stringify({ checkCount: checks.length })}::jsonb)`;
+    return { checkedAt: new Date().toISOString(), checks };
+  });

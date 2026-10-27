@@ -28,6 +28,10 @@ async function handleAuth(request: Request): Promise<Response> {
       const allSignups = (rows[0]?.value ?? "true") !== "false";
       if (path === "/sign-up/email") {
         const emailAllowed = (await setting("allow_email_signup", "true")) !== "false";
+        const maintenance = (await setting("maintenance_message", "")).trim();
+        if (maintenance) {
+          return Response.json({ code: "MAINTENANCE", message: maintenance }, { status: 503 });
+        }
         const username = String(body.username ?? "").trim();
         if (!USERNAME.test(username)) {
           return Response.json({ code: "INVALID_USERNAME", message: "A valid unique username is required." }, { status: 400 });
