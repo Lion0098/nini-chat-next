@@ -64,6 +64,11 @@ Acceptance criteria: group/channel flows work end-to-end; membership history is 
 Add admin controls for registration methods, mandatory verification, safe rate limits, maintenance mode, feature flags, upload limits, and announcements. Add reports, moderation queue, appeals/notes, and role-limited content access. Add health/metrics for API, database, storage, SMS/email status, errors, and backup freshness. Add log retention, privacy-aware exports, backup/restore drills, and alerts. Switching SMS.ir to Production requires owner-level confirmation.
 Acceptance criteria: settings are validated, audited, and enforced server-side; credentials are not displayed; restore drill and basic operational checks succeed.
 
+### Phase 7 implementation checkpoint — `phase7/platform-settings-ops`
+- Started with an incremental hardening change: system-setting changes now record an administrative audit event containing the prior and resulting non-secret values.
+- Existing registration-method switches, upload-size limit, and maintenance message remain the initial settings surface.
+- Phase 7.1 is not complete yet: mandatory verification policy, configurable rate limits, feature flags, and end-to-end enforcement tests still need implementation and verification.
+
 ## Phase 8 — Security, reliability, and first production release
 Review authentication, authorization, sessions, input validation, rate limits, uploads, secrets, and dependency vulnerabilities. Test restore, restart recovery, migrations, abuse cases, and rate limits. Configure HTTPS, firewall, non-root service, monitoring, logs, updates, and rollback. Load-test a realistic small deployment and write operator runbook, incident/restore steps, privacy/terms requirements, and release checklist.
 Acceptance criteria: no unresolved critical/high-severity blocker without explicit risk acceptance; backup restore tested; monitoring and rollback operational; user explicitly approves production release.

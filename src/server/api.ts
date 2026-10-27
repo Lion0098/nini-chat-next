@@ -2391,12 +2391,29 @@ export const adminSaveSettings = createServerFn({ method: "POST" })
       ["max_upload_bytes", String(max)],
       ["maintenance_message", maintenance],
     ];
+    const previous = {
+      allowSignups: (await setting(sql, "allow_signups", "true")) !== "false",
+      allowEmailSignup: (await setting(sql, "allow_email_signup", "true")) !== "false",
+      allowPhoneSignup: (await setting(sql, "allow_phone_signup", "true")) !== "false",
+      maxUploadBytes: Number(await setting(sql, "max_upload_bytes", "2000000")),
+      maintenance: await setting(sql, "maintenance_message", ""),
+    };
     for (const [key, value] of pairs) {
       await sql`
         insert into system_settings (key, value) values (${key}, ${value})
         on conflict (key) do update set value = ${value}
       `;
     }
+    await auditAdminEvent(sql, context.userId, "system.settings_updated", null, {
+      before: previous,
+      after: {
+        allowSignups: allow,
+        allowEmailSignup: allowEmail,
+        allowPhoneSignup: allowPhone,
+        maxUploadBytes: max,
+        maintenance,
+      },
+    });
     return ok(true);
   });
 
