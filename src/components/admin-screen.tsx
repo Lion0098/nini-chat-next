@@ -7,6 +7,11 @@ import { usePrefs } from "@/lib/prefs";
 import { formatChatTime } from "@/lib/format";
 import {
   adminCreateUser,
+  adminCreateAnnouncement,
+  adminGetOperationalStatus,
+  adminListAnnouncements,
+  adminListModerationAppeals,
+  adminReviewModerationAppeal,
   adminGetDashboard,
   adminListAuditEvents,
   adminSetAdminRole,
@@ -25,7 +30,7 @@ import {
   getMe,
 } from "@/server/api";
 
-type Tab = "dashboard" | "users" | "groups" | "reports" | "audit" | "system";
+type Tab = "dashboard" | "users" | "groups" | "reports" | "appeals" | "audit" | "system" | "ops";
 
 export function AdminScreen() {
   const { t, err, locale } = usePrefs();
@@ -34,6 +39,8 @@ export function AdminScreen() {
   const [tab, setTab] = useState<Tab>("users");
   const [q, setQ] = useState("");
   const [reportStatus, setReportStatus] = useState("");
+  const [announcementTitle, setAnnouncementTitle] = useState("");
+  const [announcementBody, setAnnouncementBody] = useState("");
   const dashboard = useQuery({
     queryKey: ["admin-dashboard"],
     queryFn: () => adminGetDashboard(),
@@ -64,6 +71,21 @@ export function AdminScreen() {
     queryFn: () => adminGetSettings(),
     enabled: meQ.data?.role === "admin" && tab === "system",
   });
+  const announcements = useQuery({
+    queryKey: ["admin-announcements"],
+    queryFn: () => adminListAnnouncements(),
+    enabled: meQ.data?.role === "admin" && tab === "ops",
+  });
+  const operationalStatus = useQuery({
+    queryKey: ["admin-operational-status"],
+    queryFn: () => adminGetOperationalStatus(),
+    enabled: meQ.data?.role === "admin" && tab === "ops",
+  });
+  const appeals = useQuery({
+    queryKey: ["admin-moderation-appeals"],
+    queryFn: () => adminListModerationAppeals({ data: { status: "" } }),
+    enabled: meQ.data?.role === "admin" && tab === "appeals",
+  });
   const [draft, setDraft] = useState<{ email: string; displayName: string; username: string } | null>(null);
 
   if (meQ.isLoading) return <div className="grid h-dvh place-items-center bg-shell">{t("appName")}</div>;
@@ -78,11 +100,13 @@ export function AdminScreen() {
     );
   }
 
-  const tabs: Tab[] = ["dashboard", "users", "groups", "reports", "audit", "system"];
+  const tabs: Tab[] = ["dashboard", "users", "groups", "reports", "appeals", "audit", "system", "ops"];
   const label: Record<Tab, string> = {
     dashboard: locale === "fa" ? "داشبورد" : "Dashboard",
     users: t("users"), groups: t("groups"), reports: t("reports"),
     audit: locale === "fa" ? "گزارش رویدادها" : "Audit log", system: t("system"),
+    appeals: locale === "fa" ? "اعتراض‌های کاربران" : "Appeals",
+    ops: locale === "fa" ? "عملیات و اطلاعیه‌ها" : "Operations",
   };
 
   return (
@@ -311,6 +335,66 @@ export function AdminScreen() {
                 </div>
               </article>
             ))}
+          </div>
+        ) : null}
+        {tab === "appeals" ? (
+          <div className="space-y-3">
+            {(appeals.data ?? []).length === 0 ? <p className="text-sm text-muted">{locale === "fa" ? "اعتراضی ثبت نشده است." : "No appeals found."}</p> : null}
+            {(appeals.data ?? []).map((a) => (
+              <article key={a.id} className="space-y-2 rounded-xl bg-panel p-3 text-sm">
+                <div className="flex flex-wrap justify-between gap-2"><strong>#{a.id} · {a.userId}</strong><span>{a.status} · {formatChatTime(a.createdAt, locale, t)}</span></div>
+                <p>{a.reason}</p>
+                {a.reviewerNote ? <p className="text-muted">{a.reviewerNote}</p> : null}
+                <div className="flex flex-wrap gap-3">
+                  <button type="button" className="text-green-2" onClick={() => {
+                    const note = window.prompt(locale === "fa" ? "یادداشت بررسی (حداقل ۳ حرف)" : "Review note (at least 3 characters)");
+                    if (!note || note.trim().length < 3) return;
+                    void adminReviewModerationAppeal({ data: { id: a.id, status: "accepted", note } }).then(() => qc.invalidateQueries({ queryKey: ["admin-moderation-appeals"] }));
+                  }}>{locale === "fa" ? "پذیرش اعتراض" : "Accept appeal"}</button>
+                  <button type="button" className="text-danger" onClick={() => {
+                    const note = window.prompt(locale === "fa" ? "دلیل رد اعتراض" : "Reason for rejection");
+                    if (!note || note.trim().length < 3) return;
+                    void adminReviewModerationAppeal({ data: { id: a.id, status: "rejected", note } }).then(() => qc.invalidateQueries({ queryKey: ["admin-moderation-appeals"] }));
+                  }}>{locale === "fa" ? "رد اعتراض" : "Reject appeal"}</button>
+                  <button type="button" onClick={() => void adminReviewModerationAppeal({ data: { id: a.id, status: "reviewing", note: "" } }).then(() => qc.invalidateQueries({ queryKey: ["admin-moderation-appeals"] }))}>{locale === "fa" ? "در حال بررسی" : "Mark reviewing"}</button>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : null}
+        {tab === "ops" ? (
+          <div className="space-y-4">
+            <section className="rounded-xl bg-panel p-4">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <h2 className="font-semibold">{locale === "fa" ? "وضعیت عملیاتی" : "Operational status"}</h2>
+                <button type="button" className="text-sm text-green-2" onClick={() => void operationalStatus.refetch()}>{locale === "fa" ? "بررسی مجدد" : "Refresh"}</button>
+              </div>
+              <p className="mb-3 text-xs text-muted">{operationalStatus.data?.checkedAt ?? ""}</p>
+              {(operationalStatus.data?.checks ?? []).map((c) => <div key={c.name} className="flex flex-wrap justify-between gap-2 border-b border-line py-2 text-sm"><strong>{c.name}</strong><span>{c.status}: {c.detail}</span></div>)}
+              <p className="mt-3 text-xs text-muted">{locale === "fa" ? "این بررسی، سلامت پیامک/ایمیل یا موفقیت بکاپ را تضمین نمی‌کند." : "This does not verify SMS/email delivery or backup success."}</p>
+            </section>
+            <section className="space-y-3 rounded-xl bg-panel p-4">
+              <h2 className="font-semibold">{locale === "fa" ? "ایجاد اطلاعیه سراسری" : "Create announcement"}</h2>
+              <input value={announcementTitle} onChange={(e) => setAnnouncementTitle(e.target.value)} maxLength={160} placeholder={locale === "fa" ? "عنوان" : "Title"} className="h-11 w-full rounded-lg bg-header px-3" />
+              <textarea value={announcementBody} onChange={(e) => setAnnouncementBody(e.target.value)} maxLength={4000} placeholder={locale === "fa" ? "متن اطلاعیه" : "Announcement text"} className="min-h-24 w-full rounded-lg bg-header p-3" />
+              <button type="button" className="h-10 rounded-full bg-green px-4 text-on" onClick={() => {
+                if (!announcementTitle.trim() || !announcementBody.trim()) return;
+                void adminCreateAnnouncement({ data: { title: announcementTitle, body: announcementBody, active: true } }).then((res) => {
+                  if (!res.ok) { toast.error(err(res.error)); return; }
+                  setAnnouncementTitle(""); setAnnouncementBody("");
+                  toast.success(locale === "fa" ? "اطلاعیه ثبت شد" : "Announcement created");
+                  void qc.invalidateQueries({ queryKey: ["admin-announcements"] });
+                  void qc.invalidateQueries({ queryKey: ["admin-audit"] });
+                });
+              }}>{locale === "fa" ? "ثبت اطلاعیه" : "Publish announcement"}</button>
+              <div className="space-y-2">
+                {(announcements.data ?? []).map((a) => <article key={a.id} className="rounded-lg bg-header p-3 text-sm">
+                  <div className="flex flex-wrap justify-between gap-2"><strong>{a.title}</strong><span>{a.active ? (locale === "fa" ? "فعال" : "Active") : (locale === "fa" ? "غیرفعال" : "Inactive")}</span></div>
+                  <p className="my-2 whitespace-pre-wrap">{a.body}</p>
+                  <button type="button" className="text-green-2" onClick={() => void import("@/server/api").then(({ adminSetAnnouncementActive }) => adminSetAnnouncementActive({ data: { id: a.id, active: !a.active } })).then(() => qc.invalidateQueries({ queryKey: ["admin-announcements"] }))}>{a.active ? (locale === "fa" ? "غیرفعال کردن" : "Deactivate") : (locale === "fa" ? "فعال کردن" : "Activate")}</button>
+                </article>)}
+              </div>
+            </section>
           </div>
         ) : null}
         {tab === "system" && settings.data ? (
