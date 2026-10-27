@@ -31,8 +31,13 @@ try {
      ON CONFLICT (user_id) DO UPDATE SET role = 'admin', updated_at = now()`,
     [user.id, user.username ?? null, user.name || user.username || "Admin"],
   );
+  await client.query(`
+    INSERT INTO admin_role_assignments (user_id, role, assigned_by)
+    VALUES ($1, 'owner', $1)
+    ON CONFLICT (user_id) DO NOTHING
+  `, [user.id]);
   await client.query("COMMIT");
-  console.log("Initial admin role granted to the existing account.");
+  console.log("Initial owner role granted to the existing account.");
 } catch (error) {
   await client.query("ROLLBACK").catch(() => {});
   console.error(error instanceof Error ? error.message : "Admin bootstrap failed.");

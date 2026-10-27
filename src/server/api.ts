@@ -283,10 +283,34 @@ async function publicUser(sql: Sql, viewer: string, row: ProfileRow): Promise<Pu
   };
 }
 
+type AdminRole = "owner" | "administrator" | "moderator" | "support" | "auditor";
+
+async function adminRoleOf(sql: Sql, userId: string): Promise<AdminRole | null> {
+  const rows = await sql<{ role: string }>`select role from admin_role_assignments where user_id = ${userId}`;
+  const role = rows[0]?.role;
+  return ["owner", "administrator", "moderator", "support", "auditor"].includes(role || "") ? role as AdminRole : null;
+}
+
 async function requireAdmin(sql: Sql, userId: string) {
   const row = await ensure(sql, userId);
-  if (row.role !== "admin") throw new Error("forbidden");
+  const assigned = await adminRoleOf(sql, userId);
+  // Existing admin profile flags are not sufficient by themselves after Phase 5.
+  // Only owner/administrator may use the legacy full-console mutations.
+  if (row.role !== "admin" || (assigned !== "owner" && assigned !== "administrator")) throw new Error("forbidden");
   return row;
+}
+
+async function requireAuditReader(sql: Sql, userId: string) {
+  const row = await ensure(sql, userId);
+  const assigned = await adminRoleOf(sql, userId);
+  if (row.role !== "admin" || !["owner", "administrator", "auditor"].includes(assigned || "")) throw new Error("forbidden");
+  return { row, role: assigned as AdminRole };
+}
+
+async function auditAdminEvent(sql: Sql, actorId: string, action: string, targetUserId: string | null = null, details: Record<string, unknown> = {}) {
+  // Keep metadata allowlisted and never persist credentials, tokens, or OTP material.
+  const safe = Object.fromEntries(Object.entries(details).filter(([key]) => !/(password|token|secret|otp|api.?key|credential)/i.test(key)));
+  await sql`insert into admin_audit_events (actor_user_id, action, target_user_id, details) values (${actorId}, ${action}, ${targetUserId}, ${JSON.stringify(safe)}::jsonb)`;
 }
 
 export const getPublicConfig = createServerFn({ method: "GET" }).handler(async () => {
@@ -1783,6 +1807,66 @@ export const answerCall = createServerFn({ method: "POST" })
     return ok(true);
   });
 
+
+export const adminGetDashboard = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const sql = await getSql();
+    const { role } = await requireAuditReader(sql, context.userId);
+    const rows = await sql<{ users: number; active: number; suspended: number; admins: number; groups: number; reports: number }>`
+      select (select count(*)::int from "user") as users,
+             (select count(*)::int from profiles where coalesce(suspended, false) = false) as active,
+             (select count(*)::int from profiles where coalesce(suspended, false) = true) as suspended,
+             (select count(*)::int from admin_role_assignments) as admins,
+             (select count(*)::int from chats where kind = 'group') as groups,
+             (select count(*)::int from reports where status = 'open') as reports
+    `;
+    return { ...rows[0], viewerRole: role };
+  });
+
+export const adminListAuditEvents = createServerFn({ method: "GET" })
+  .validator((input: unknown) => {
+    const o = rec(input ?? {});
+    return { q: clean(o.q, 80), limit: Math.max(1, Math.min(100, Number(o.limit) || 50)) };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    const { role } = await requireAuditReader(sql, context.userId);
+    const q = `%${data.q.replace(/[%_]/g, "").toLowerCase()}%`;
+    const rows = await sql<{ id: string; actor_user_id: string; actor_name: string | null; action: string; target_user_id: string | null; target_name: string | null; details: unknown; created_at: unknown }>`
+      select e.id, e.actor_user_id, a.display_name as actor_name, e.action, e.target_user_id,
+             t.display_name as target_name, e.details, e.created_at
+      from admin_audit_events e
+      left join profiles a on a.user_id = e.actor_user_id
+      left join profiles t on t.user_id = e.target_user_id
+      where ${data.q} = '' or lower(e.action) like ${q} or lower(coalesce(a.display_name, '')) like ${q}
+         or lower(coalesce(t.display_name, '')) like ${q} or e.target_user_id like ${q}
+      order by e.created_at desc, e.id desc limit ${data.limit}
+    `;
+    return { viewerRole: role, events: rows.map((r) => ({ id: r.id, actorUserId: r.actor_user_id, actorName: r.actor_name || r.actor_user_id, action: r.action, targetUserId: r.target_user_id, targetName: r.target_name, details: r.details, createdAt: iso(r.created_at) })) };
+  });
+
+export const adminSetAdminRole = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input); const userId = clean(o.userId, 80); const role = clean(o.role, 24);
+    if (!userId || !["administrator", "moderator", "support", "auditor"].includes(role)) throw new Error("bad_input");
+    return { userId, role: role as Exclude<AdminRole, "owner"> };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    const actor = await requireAdmin(sql, context.userId);
+    const actorRole = await adminRoleOf(sql, context.userId);
+    if (actorRole !== "owner") return err("forbidden");
+    if (data.userId === actor.user_id) return err("self");
+    const target = await profileOf(sql, data.userId);
+    if (!target) return err("not_found");
+    await sql`insert into admin_role_assignments (user_id, role, assigned_by) values (${data.userId}, ${data.role}, ${context.userId}) on conflict (user_id) do update set role = excluded.role, assigned_by = excluded.assigned_by, updated_at = now()`;
+    await auditAdminEvent(sql, context.userId, "admin.role_changed", data.userId, { role: data.role });
+    return ok(true);
+  });
+
 export const adminListUsers = createServerFn({ method: "GET" })
   .validator((input: unknown) => ({ q: clean(rec(input ?? {}).q, 60).toLowerCase() }))
   .middleware([authMiddleware])
@@ -1895,6 +1979,7 @@ export const adminSaveUser = createServerFn({ method: "POST" })
         updated_at = now()
       where user_id = ${userId}
     `;
+    await auditAdminEvent(sql, context.userId, "user.updated", userId, { fields: ["profile", "role", "suspended"].filter((field) => field === "profile" || (field === "role" && data.role !== undefined) || (field === "suspended" && data.suspended !== undefined)) });
     return ok(true);
   });
 
@@ -1927,6 +2012,7 @@ export const adminCreateUser = createServerFn({ method: "POST" })
         values (${userId}, ${username}, ${displayName}, 'user', null)
         on conflict (user_id) do update set username = ${username}, display_name = ${displayName}
       `;
+      await auditAdminEvent(sql, context.userId, "user.created", userId, { method: "admin_signup" });
       return ok({ userId });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -1965,6 +2051,7 @@ export const adminDeleteUser = createServerFn({ method: "POST" })
     await sql`delete from "session" where "userId" = ${id}`;
     await sql`delete from "account" where "userId" = ${id}`;
     await sql`delete from "user" where id = ${id}`;
+    await auditAdminEvent(sql, context.userId, "user.deleted", id, { hardDelete: true });
     return ok(true);
   });
 
@@ -2029,6 +2116,7 @@ export const adminDeleteGroup = createServerFn({ method: "POST" })
     const sql = await getSql();
     await requireAdmin(sql, context.userId);
     await sql`delete from chats where id = ${data.id} and kind = 'group'`;
+    await auditAdminEvent(sql, context.userId, "group.deleted", null, { chatId: data.id });
     return ok(true);
   });
 
@@ -2090,6 +2178,7 @@ export const adminSetReport = createServerFn({ method: "POST" })
     const sql = await getSql();
     await requireAdmin(sql, context.userId);
     await sql`update reports set status = ${data.status} where id = ${data.id}`;
+    await auditAdminEvent(sql, context.userId, "report.status_changed", null, { reportId: data.id, status: data.status });
     return ok(true);
   });
 
