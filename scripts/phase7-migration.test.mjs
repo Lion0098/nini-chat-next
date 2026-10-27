@@ -39,3 +39,20 @@ test("auth route rate-limits sensitive entry points without a shared unknown-IP 
   assert.doesNotMatch(authRoute, /\|\|\s*"unknown"/);
   assert.match(authRoute, /Retry-After/);
 });
+
+
+test("public announcements and operational status are resilient to unavailable storage", async () => {
+  const api = await readFile(new URL("../src/server/api.ts", import.meta.url), "utf8");
+  assert.match(api, /export const listActiveAnnouncements = createServerFn/);
+  assert.match(api, /where active = true order by created_at desc limit 10/);
+  assert.match(api, /Announcement storage is unavailable/);
+  assert.match(api, /Could not persist the operational check history/);
+});
+
+test("admin report notes are available in the report moderation UI", async () => {
+  const admin = await readFile(new URL("../src/components/admin-screen.tsx", import.meta.url), "utf8");
+  const notesComponent = await readFile(new URL("../src/components/admin-report-notes.tsx", import.meta.url), "utf8");
+  assert.match(admin, /<AdminReportNotes reportId={r.id} \/>/);
+  assert.match(notesComponent, /addModerationReportNote/);
+  assert.match(notesComponent, /listModerationReportNotes/);
+});

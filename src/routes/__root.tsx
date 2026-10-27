@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "sonner";
 import { AuthProvider } from "@/lib/auth/provider";
 import { PreviewHostBridge } from "@/components/preview-host-bridge";
+import { AnnouncementBanner } from "@/components/announcement-banner";
 import { PrefsProvider, usePrefs } from "@/lib/prefs";
 import appCss from "../styles.css?url";
 
@@ -44,6 +45,7 @@ function Root() {
         <AuthProvider>
           <PrefsProvider>
             <QueryClientProvider client={queryClient}>
+              <AnnouncementBanner />
               <Outlet />
               <ThemedToaster />
             </QueryClientProvider>

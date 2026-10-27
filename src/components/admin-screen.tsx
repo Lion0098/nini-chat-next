@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { ArrowRight } from "lucide-react";
 import { usePrefs } from "@/lib/prefs";
 import { formatChatTime } from "@/lib/format";
+import { AdminReportNotes } from "@/components/admin-report-notes";
 import {
   adminCreateUser,
   adminCreateAnnouncement,
@@ -329,6 +330,7 @@ export function AdminScreen() {
                 <div className="font-medium">{r.reporterName} → {r.targetName || r.targetUserId || t("message")}</div>
                 <div className="text-muted">{r.reason} · {r.status} · {formatChatTime(r.createdAt, locale, t)}</div>
                 {r.details ? <p className="mt-1">{r.details}</p> : null}
+                <AdminReportNotes reportId={r.id} />
                 <div className="mt-2 flex gap-3">
                   <button type="button" className="text-green-2" onClick={() => void adminSetReport({ data: { id: r.id, status: "reviewed" } }).then(() => qc.invalidateQueries({ queryKey: ["admin-reports"] }))}>{t("markReviewed")}</button>
                   <button type="button" onClick={() => void adminSetReport({ data: { id: r.id, status: "dismissed" } }).then(() => qc.invalidateQueries({ queryKey: ["admin-reports"] }))}>{t("dismiss")}</button>

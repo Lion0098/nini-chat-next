@@ -2789,6 +2789,21 @@ export const archiveChannel = createServerFn({ method: "POST" })
 
 
 // Phase 7 operations: announcements, moderation case notes, appeals and safe health checks.
+export const listActiveAnnouncements = createServerFn({ method: "GET" })
+  .handler(async () => {
+    try {
+      const sql = await getSql();
+      const rows = await sql<{ id: number; title: string; body: string; created_at: unknown }>`
+        select id, title, body, created_at from system_announcements
+        where active = true order by created_at desc limit 10
+      `;
+      return rows.map((r) => ({ id: Number(r.id), title: r.title, body: r.body, createdAt: iso(r.created_at) ?? "" }));
+    } catch {
+      // Public shell must remain usable before migrations or when storage is temporarily unavailable.
+      return [];
+    }
+  });
+
 export const adminListAnnouncements = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
@@ -2937,16 +2952,33 @@ export const adminGetOperationalStatus = createServerFn({ method: "GET" })
     const sql = await getSql();
     await requireAssignedRole(sql, context.userId, ["owner", "administrator", "auditor"]);
     const checks: { name: string; status: "ok" | "warning" | "error"; detail: string }[] = [];
+    let databaseReady = false;
     try {
       await sql`select 1 as ready`;
+      databaseReady = true;
       checks.push({ name: "database", status: "ok", detail: "Database query succeeded." });
     } catch {
       checks.push({ name: "database", status: "error", detail: "Database query failed." });
     }
-    const rows = await sql<{ count: number }>`select count(*)::int as count from "user"`;
-    checks.push({ name: "database_users_query", status: "ok", detail: `User count query succeeded (${rows[0]?.count ?? 0} records).` });
-    const active = await sql<{ count: number }>`select count(*)::int as count from system_announcements where active = true`;
-    checks.push({ name: "announcements", status: "ok", detail: `${active[0]?.count ?? 0} active announcements.` });
-    await sql`insert into ops_check_events(check_name, status, details) values ('admin_operational_status', 'ok', ${JSON.stringify({ checkCount: checks.length })}::jsonb)`;
+    if (databaseReady) {
+      try {
+        const rows = await sql<{ count: number }>`select count(*)::int as count from "user"`;
+        checks.push({ name: "database_users_query", status: "ok", detail: `User count query succeeded (${rows[0]?.count ?? 0} records).` });
+      } catch {
+        checks.push({ name: "database_users_query", status: "error", detail: "User count query failed." });
+      }
+      try {
+        const active = await sql<{ count: number }>`select count(*)::int as count from system_announcements where active = true`;
+        checks.push({ name: "announcements", status: "ok", detail: `${active[0]?.count ?? 0} active announcements.` });
+      } catch {
+        checks.push({ name: "announcements", status: "warning", detail: "Announcement storage is unavailable; confirm Phase 7 migrations have been applied." });
+      }
+      try {
+        const worst = checks.some((c) => c.status === "error") ? "error" : checks.some((c) => c.status === "warning") ? "warning" : "ok";
+        await sql`insert into ops_check_events(check_name, status, details) values ('admin_operational_status', ${worst}, ${JSON.stringify({ checkCount: checks.length })}::jsonb)`;
+      } catch {
+        checks.push({ name: "ops_history", status: "warning", detail: "Could not persist the operational check history." });
+      }
+    }
     return { checkedAt: new Date().toISOString(), checks };
   });
