@@ -58,7 +58,7 @@ Acceptance criteria: group/channel flows work end-to-end; membership history is 
 ### Phase 6 implementation checkpoint
 - Added migration `0008_phase6_groups_channels.sql` for group lifecycle metadata, invitations, append-only-style membership history records, and a separate channel/member/post schema.
 - Added protected APIs for group visibility/join policy, archive/unarchive, ownership transfer, invitation issue/response, membership history, channel creation/list/join/publish/read, channel role changes, channel ownership transfer, and channel membership history.
-- Full browser UI integration, real database migration execution, typecheck, and production build remain acceptance checks; do not mark Phase 6 fully accepted until those are run.
+- Added a messenger Channels panel for creating/browsing public channels, joining/leaving, reading/publishing posts, and owner archive actions. Repository CI must still confirm typecheck, tests, production build, and database migration before acceptance.
 
 ## Phase 7 — Platform settings, moderation, and operations
 Add admin controls for registration methods, mandatory verification, safe rate limits, maintenance mode, feature flags, upload limits, and announcements. Add reports, moderation queue, appeals/notes, and role-limited content access. Add health/metrics for API, database, storage, SMS/email status, errors, and backup freshness. Add log retention, privacy-aware exports, backup/restore drills, and alerts. Switching SMS.ir to Production requires owner-level confirmation.

@@ -76,3 +76,7 @@ CREATE TABLE IF NOT EXISTS channel_membership_history (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS channel_history_idx ON channel_membership_history(channel_id, created_at DESC, id DESC);
+
+-- Correct uniqueness for pending invitations (NULL values are distinct in ordinary UNIQUE constraints).
+CREATE UNIQUE INDEX IF NOT EXISTS group_invitations_one_pending_idx
+  ON group_invitations(chat_id, invited_user_id) WHERE accepted_at IS NULL;

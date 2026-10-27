@@ -60,10 +60,18 @@ import {
   updateGroup,
   viewStatus,
   getMe,
+  createChannel,
+  listMyChannels,
+  listPublicChannels,
+  joinPublicChannel,
+  listChannelPosts,
+  publishChannelPost,
+  leaveChannel,
+  archiveChannel,
 } from "@/server/api";
 import { CallLayer } from "@/components/call-dock";
 
-type Pane = null | "profile" | "settings" | "privacy" | "blocked" | "new" | "group" | "status" | "archive";
+type Pane = null | "profile" | "settings" | "privacy" | "blocked" | "new" | "group" | "status" | "archive" | "channels";
 
 function Splash() {
   return (
@@ -293,6 +301,7 @@ function Shell({ me }: { me: Me }) {
             {menu ? (
               <div className="absolute end-2 top-14 z-20 w-56 rounded-lg bg-panel py-1 shadow-xl ring-1 ring-line">
                 <MenuBtn onClick={() => { setPane("group"); setMenu(false); }}>{t("newGroup")}</MenuBtn>
+                <MenuBtn onClick={() => { setPane("channels"); setMenu(false); }}>{locale === "fa" ? "کانال‌ها" : "Channels"}</MenuBtn>
                 <MenuBtn onClick={() => { setPane("status"); setMenu(false); }}>{t("status")}</MenuBtn>
                 <MenuBtn onClick={() => { setPane("archive"); setMenu(false); }}>{t("archived")}</MenuBtn>
                 <MenuBtn onClick={() => { setPane("settings"); setMenu(false); }}>{t("settings")}</MenuBtn>
@@ -933,6 +942,89 @@ function Chip({ children, onClick }: { children: string; onClick: () => void }) 
   );
 }
 
+
+function ChannelsPanel() {
+  const { locale, err } = usePrefs();
+  const qc = useQueryClient();
+  const [title, setTitle] = useState("");
+  const [about, setAbout] = useState("");
+  const [postText, setPostText] = useState("");
+  const [selected, setSelected] = useState<string | null>(null);
+  const mine = useQuery({ queryKey: ["my-channels"], queryFn: () => listMyChannels() });
+  const publicList = useQuery({ queryKey: ["public-channels"], queryFn: () => listPublicChannels() });
+  const posts = useQuery({ queryKey: ["channel-posts", selected], queryFn: () => listChannelPosts({ data: { channelId: selected ?? "" } }), enabled: Boolean(selected) });
+  const selectedMine = (mine.data ?? []).find((c) => c.id === selected);
+  async function create() {
+    const res = await createChannel({ data: { title, about, visibility: "public", joinPolicy: "open" } });
+    if (!res.ok) return toast.error(err(res.error));
+    setTitle(""); setAbout(""); setSelected(res.data.id);
+    await Promise.all([qc.invalidateQueries({ queryKey: ["my-channels"] }), qc.invalidateQueries({ queryKey: ["public-channels"] })]);
+  }
+  async function join(channelId: string) {
+    const res = await joinPublicChannel({ data: { channelId } });
+    if (!res.ok) toast.error(err(res.error));
+    else {
+      setSelected(channelId);
+      await Promise.all([qc.invalidateQueries({ queryKey: ["my-channels"] }), qc.invalidateQueries({ queryKey: ["public-channels"] })]);
+    }
+  }
+  async function publish() {
+    if (!selected || !postText.trim()) return;
+    const res = await publishChannelPost({ data: { channelId: selected, body: postText } });
+    if (!res.ok) toast.error(err(res.error));
+    else {
+      setPostText("");
+      await qc.invalidateQueries({ queryKey: ["channel-posts", selected] });
+      await qc.invalidateQueries({ queryKey: ["my-channels"] });
+    }
+  }
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl bg-header p-3 space-y-2">
+        <h3 className="font-semibold">{locale === "fa" ? "ساخت کانال عمومی" : "Create public channel"}</h3>
+        <Field label={locale === "fa" ? "نام کانال" : "Channel name"} value={title} onChange={setTitle} />
+        <Field label={locale === "fa" ? "توضیحات" : "Description"} value={about} onChange={setAbout} />
+        <button type="button" disabled={!title.trim()} onClick={() => void create()} className="h-10 w-full rounded-full bg-green text-on disabled:opacity-50">{locale === "fa" ? "ایجاد کانال" : "Create channel"}</button>
+      </div>
+      <div className="space-y-2">
+        <h3 className="font-semibold">{locale === "fa" ? "کانال‌های من" : "My channels"}</h3>
+        {(mine.data ?? []).length === 0 ? <p className="text-sm text-muted">{locale === "fa" ? "هنوز کانالی ندارید." : "No channels yet."}</p> : null}
+        {(mine.data ?? []).map((c) => (
+          <button key={c.id} type="button" onClick={() => setSelected(c.id)} className={`w-full rounded-lg p-3 text-start ${selected === c.id ? "bg-active" : "bg-header"}`}>
+            <span className="block font-medium">{c.title}</span><span className="text-xs text-muted">{c.role} · {c.visibility}</span>
+          </button>
+        ))}
+      </div>
+      <div className="space-y-2">
+        <h3 className="font-semibold">{locale === "fa" ? "کانال‌های عمومی" : "Public channels"}</h3>
+        {(publicList.data ?? []).map((c) => (
+          <div key={c.id} className="flex items-center gap-2 rounded-lg bg-header p-3">
+            <button type="button" className="min-w-0 flex-1 text-start" onClick={() => setSelected(c.id)}><span className="block truncate font-medium">{c.title}</span><span className="text-xs text-muted">{c.members} {locale === "fa" ? "عضو" : "members"}</span></button>
+            {c.joined ? <span className="text-xs text-green-2">{locale === "fa" ? "عضو" : "Joined"}</span> : <button type="button" className="text-sm text-green-2" onClick={() => void join(c.id)}>{locale === "fa" ? "عضویت" : "Join"}</button>}
+          </div>
+        ))}
+      </div>
+      {selected ? (
+        <div className="space-y-3 border-t border-line pt-3">
+          <div className="font-semibold">{selectedMine?.title ?? (locale === "fa" ? "کانال انتخاب‌شده" : "Selected channel")}</div>
+          <div className="max-h-64 space-y-2 overflow-y-auto">
+            {(posts.data ?? []).map((p) => <article key={p.id} className="rounded-lg bg-header p-3"><p className="whitespace-pre-wrap break-words text-sm">{p.body}</p><time className="mt-1 block text-xs text-muted">{new Date(p.createdAt).toLocaleString(locale === "fa" ? "fa-IR" : "en-US")}</time></article>)}
+            {posts.data && posts.data.length === 0 ? <p className="text-sm text-muted">{locale === "fa" ? "هنوز مطلبی منتشر نشده." : "No posts yet."}</p> : null}
+          </div>
+          {selectedMine && ["owner","admin","editor"].includes(selectedMine.role) ? (
+            <div className="space-y-2">
+              <textarea value={postText} onChange={(e) => setPostText(e.target.value)} maxLength={4000} placeholder={locale === "fa" ? "متن پیام کانال..." : "Write a channel post..."} className="min-h-20 w-full rounded-lg bg-header p-3 text-sm outline-none" />
+              <button type="button" disabled={!postText.trim()} onClick={() => void publish()} className="h-10 w-full rounded-full bg-green text-on disabled:opacity-50">{locale === "fa" ? "انتشار مطلب" : "Publish post"}</button>
+            </div>
+          ) : null}
+          {selectedMine?.role === "owner" ? <button type="button" onClick={() => { if (window.confirm(locale === "fa" ? "کانال بایگانی شود؟" : "Archive this channel?")) void archiveChannel({ data: { channelId: selected, archived: true } }).then((res) => { if (!res.ok) toast.error(err(res.error)); else { setSelected(null); void qc.invalidateQueries({ queryKey: ["my-channels"] }); void qc.invalidateQueries({ queryKey: ["public-channels"] }); } }); }} className="w-full rounded-lg py-2 text-sm text-danger">{locale === "fa" ? "بایگانی کانال" : "Archive channel"}</button> : null}
+          {selectedMine && selectedMine.role !== "owner" ? <button type="button" onClick={() => void leaveChannel({ data: { channelId: selected } }).then((res) => { if (!res.ok) toast.error(err(res.error)); else { setSelected(null); void qc.invalidateQueries({ queryKey: ["my-channels"] }); void qc.invalidateQueries({ queryKey: ["public-channels"] }); } })} className="w-full rounded-lg py-2 text-sm text-danger">{locale === "fa" ? "ترک کانال" : "Leave channel"}</button> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function SidePane({
   pane,
   me,
@@ -1098,6 +1190,7 @@ function SidePane({
             </div>
           </>
         ) : null}
+        {pane === "channels" ? <ChannelsPanel /> : null}
         {pane === "privacy" ? <PrivacyForm me={me} /> : null}
         {pane === "blocked" ? (
           <div className="space-y-2">
