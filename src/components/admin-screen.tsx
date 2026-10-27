@@ -7,6 +7,9 @@ import { usePrefs } from "@/lib/prefs";
 import { formatChatTime } from "@/lib/format";
 import {
   adminCreateUser,
+  adminGetDashboard,
+  adminListAuditEvents,
+  adminSetAdminRole,
   adminDeleteGroup,
   adminDeleteUser,
   adminGetSettings,
@@ -20,7 +23,7 @@ import {
   getMe,
 } from "@/server/api";
 
-type Tab = "users" | "groups" | "reports" | "system";
+type Tab = "dashboard" | "users" | "groups" | "reports" | "audit" | "system";
 
 export function AdminScreen() {
   const { t, err, locale } = usePrefs();
@@ -29,6 +32,16 @@ export function AdminScreen() {
   const [tab, setTab] = useState<Tab>("users");
   const [q, setQ] = useState("");
   const [reportStatus, setReportStatus] = useState("");
+  const dashboard = useQuery({
+    queryKey: ["admin-dashboard"],
+    queryFn: () => adminGetDashboard(),
+    enabled: meQ.data?.role === "admin",
+  });
+  const audit = useQuery({
+    queryKey: ["admin-audit", q],
+    queryFn: () => adminListAuditEvents({ data: { q, limit: 100 } }),
+    enabled: meQ.data?.role === "admin" && tab === "audit",
+  });
   const users = useQuery({
     queryKey: ["admin-users", q],
     queryFn: () => adminListUsers({ data: { q } }),
@@ -63,8 +76,12 @@ export function AdminScreen() {
     );
   }
 
-  const tabs: Tab[] = ["users", "groups", "reports", "system"];
-  const label: Record<Tab, string> = { users: t("users"), groups: t("groups"), reports: t("reports"), system: t("system") };
+  const tabs: Tab[] = ["dashboard", "users", "groups", "reports", "audit", "system"];
+  const label: Record<Tab, string> = {
+    dashboard: locale === "fa" ? "داشبورد" : "Dashboard",
+    users: t("users"), groups: t("groups"), reports: t("reports"),
+    audit: locale === "fa" ? "گزارش رویدادها" : "Audit log", system: t("system"),
+  };
 
   return (
     <div className="min-h-dvh bg-shell text-ink">
@@ -82,8 +99,39 @@ export function AdminScreen() {
             </button>
           ))}
         </div>
-        {tab !== "reports" && tab !== "system" ? (
+        {["users", "groups", "audit"].includes(tab) ? (
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("searchUsersPh")} className="mb-4 h-11 w-full rounded-lg bg-panel px-3 outline-none" />
+        ) : null}
+        {tab === "dashboard" ? (
+          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {[
+              [locale === "fa" ? "کل کاربران" : "Total users", dashboard.data?.users],
+              [locale === "fa" ? "حساب‌های فعال" : "Active accounts", dashboard.data?.active],
+              [locale === "fa" ? "مسدودشده‌ها" : "Suspended accounts", dashboard.data?.suspended],
+              [locale === "fa" ? "مدیران دارای نقش" : "Privileged accounts", dashboard.data?.admins],
+              [locale === "fa" ? "گروه‌ها" : "Groups", dashboard.data?.groups],
+              [locale === "fa" ? "گزارش‌های باز" : "Open reports", dashboard.data?.reports],
+            ].map(([title, value]) => (
+              <article key={String(title)} className="rounded-xl bg-panel p-4">
+                <p className="text-sm text-muted">{title}</p>
+                <p className="mt-2 text-2xl font-semibold">{dashboard.isLoading ? "…" : Number(value ?? 0).toLocaleString(locale === "fa" ? "fa-IR" : "en-US")}</p>
+              </article>
+            ))}
+            <p className="text-xs text-muted sm:col-span-2 lg:col-span-3">{locale === "fa" ? `نقش دسترسی شما: ${dashboard.data?.viewerRole ?? "—"}` : `Your access role: ${dashboard.data?.viewerRole ?? "—"}`}</p>
+          </section>
+        ) : null}
+        {tab === "audit" ? (
+          <section className="space-y-2">
+            <p className="text-xs text-muted">{locale === "fa" ? "این رویدادها فقط خواندنی هستند؛ اطلاعات محرمانه در جزئیات ثبت نمی‌شوند." : "Read-only events. Secret values are not included in event metadata."}</p>
+            {(audit.data?.events ?? []).length === 0 ? <p className="rounded-xl bg-panel p-4 text-sm text-muted">{locale === "fa" ? "رویدادی پیدا نشد." : "No events found."}</p> : null}
+            {(audit.data?.events ?? []).map((event) => (
+              <article key={event.id} className="rounded-xl bg-panel p-3 text-sm">
+                <div className="flex flex-wrap justify-between gap-2"><strong>{event.action}</strong><time className="text-muted">{formatChatTime(event.createdAt, locale, t)}</time></div>
+                <p className="mt-1 text-muted">{locale === "fa" ? "عامل:" : "Actor:"} {event.actorName} · {locale === "fa" ? "هدف:" : "Target:"} {event.targetName || event.targetUserId || "—"}</p>
+                {event.details ? <pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-xs text-muted">{JSON.stringify(event.details, null, 2)}</pre> : null}
+              </article>
+            ))}
+          </section>
         ) : null}
         {tab === "users" ? (
           <div className="space-y-3">
@@ -163,6 +211,16 @@ export function AdminScreen() {
                           >
                             {t("role")}
                           </button>
+                          {dashboard.data?.viewerRole === "owner" ? (
+                            <button type="button" className="text-green-2" onClick={() => {
+                              const chosen = window.prompt(locale === "fa" ? "نقش مدیریتی: administrator, moderator, support, auditor" : "Admin role: administrator, moderator, support, auditor", "auditor");
+                              if (!chosen) return;
+                              void adminSetAdminRole({ data: { userId: u.userId, role: chosen } }).then((res) => {
+                                if (!res.ok) toast.error(err(res.error));
+                                else { toast.success(locale === "fa" ? "نقش ثبت شد" : "Role saved"); void qc.invalidateQueries({ queryKey: ["admin-dashboard"] }); }
+                              });
+                            }}>{locale === "fa" ? "تعیین دسترسی" : "Set access"}</button>
+                          ) : null}
                           <button
                             type="button"
                             onClick={() => void adminSaveUser({ data: { userId: u.userId, suspended: !u.suspended } }).then((res) => {

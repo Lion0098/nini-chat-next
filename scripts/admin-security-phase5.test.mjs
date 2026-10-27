@@ -8,6 +8,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
 const migration = read("migrations/0006_admin_security.sql");
 const api = read("src/server/api.ts");
+const adminUi = read("src/components/admin-screen.tsx");
 
 test("Phase 5 migration defines scoped admin roles and preserves existing admin accounts", () => {
   for (const role of ["owner", "administrator", "moderator", "support", "auditor"]) assert.match(migration, new RegExp(`'${role}'`));
@@ -34,4 +35,12 @@ test("dashboard, audit reader and role assignment APIs require backend authoriza
 test("sensitive account changes emit audit events without logging password values", () => {
   for (const action of ["user.updated", "user.created", "user.deleted", "report.status_changed", "admin.role_changed"]) assert.ok(api.includes(action), `missing ${action}`);
   assert.ok(!api.includes("auditAdminEvent(sql, context.userId, \"user.created\", userId, { password"));
+});
+
+test("admin console exposes dashboard, audit history and owner-only role controls", () => {
+  assert.match(adminUi, /adminGetDashboard/);
+  assert.match(adminUi, /adminListAuditEvents/);
+  assert.match(adminUi, /adminSetAdminRole/);
+  assert.match(adminUi, /viewerRole === "owner"/);
+  assert.match(adminUi, /tab === "audit"/);
 });
