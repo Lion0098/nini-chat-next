@@ -68,6 +68,8 @@ import {
   publishChannelPost,
   leaveChannel,
   archiveChannel,
+  listMyGroupInvitations,
+  respondGroupInvitation,
 } from "@/server/api";
 import { CallLayer } from "@/components/call-dock";
 
@@ -953,6 +955,7 @@ function ChannelsPanel() {
   const mine = useQuery({ queryKey: ["my-channels"], queryFn: () => listMyChannels() });
   const publicList = useQuery({ queryKey: ["public-channels"], queryFn: () => listPublicChannels() });
   const posts = useQuery({ queryKey: ["channel-posts", selected], queryFn: () => listChannelPosts({ data: { channelId: selected ?? "" } }), enabled: Boolean(selected) });
+  const groupInvites = useQuery({ queryKey: ["group-invitations"], queryFn: () => listMyGroupInvitations() });
   const selectedMine = (mine.data ?? []).find((c) => c.id === selected);
   async function create() {
     const res = await createChannel({ data: { title, about, visibility: "public", joinPolicy: "open" } });
@@ -987,6 +990,20 @@ function ChannelsPanel() {
         <button type="button" disabled={!title.trim()} onClick={() => void create()} className="h-10 w-full rounded-full bg-green text-on disabled:opacity-50">{locale === "fa" ? "ایجاد کانال" : "Create channel"}</button>
       </div>
       <div className="space-y-2">
+        <h3 className="font-semibold">{locale === "fa" ? "دعوت‌نامه‌های گروه" : "Group invitations"}</h3>
+        {(groupInvites.data ?? []).length === 0 ? <p className="text-sm text-muted">{locale === "fa" ? "دعوت‌نامه فعالی ندارید." : "No pending invitations."}</p> : null}
+        {(groupInvites.data ?? []).map((inv) => (
+          <div key={inv.id} className="rounded-lg bg-header p-3">
+            <div className="font-medium">{inv.groupTitle}</div>
+            <div className="mt-1 text-xs text-muted">{locale === "fa" ? "دعوت از طرف" : "Invited by"}: {inv.invitedBy}</div>
+            <div className="mt-2 flex gap-2">
+              <button type="button" onClick={() => void respondGroupInvitation({ data: { invitationId: inv.id, accept: true } }).then(async (res) => { if (!res.ok) toast.error(err(res.error)); else { await qc.invalidateQueries({ queryKey: ["group-invitations"] }); await qc.invalidateQueries({ queryKey: ["chats"] }); toast.success(locale === "fa" ? "به گروه اضافه شدی." : "Joined group."); } })} className="h-9 flex-1 rounded-full bg-green text-sm text-on">{locale === "fa" ? "پذیرش" : "Accept"}</button>
+              <button type="button" onClick={() => void respondGroupInvitation({ data: { invitationId: inv.id, accept: false } }).then(async (res) => { if (!res.ok) toast.error(err(res.error)); else await qc.invalidateQueries({ queryKey: ["group-invitations"] }); })} className="h-9 flex-1 rounded-full bg-panel text-sm">{locale === "fa" ? "رد" : "Decline"}</button>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="space-y-2">
         <h3 className="font-semibold">{locale === "fa" ? "کانال‌های من" : "My channels"}</h3>
         {(mine.data ?? []).length === 0 ? <p className="text-sm text-muted">{locale === "fa" ? "هنوز کانالی ندارید." : "No channels yet."}</p> : null}
         {(mine.data ?? []).map((c) => (
@@ -1008,7 +1025,7 @@ function ChannelsPanel() {
         <div className="space-y-3 border-t border-line pt-3">
           <div className="font-semibold">{selectedMine?.title ?? (locale === "fa" ? "کانال انتخاب‌شده" : "Selected channel")}</div>
           <div className="max-h-64 space-y-2 overflow-y-auto">
-            {(posts.data ?? []).map((p) => <article key={p.id} className="rounded-lg bg-header p-3"><p className="whitespace-pre-wrap break-words text-sm">{p.body}</p><time className="mt-1 block text-xs text-muted">{new Date(p.createdAt).toLocaleString(locale === "fa" ? "fa-IR" : "en-US")}</time></article>)}
+            {(posts.data ?? []).map((p) => <article key={p.id} className="rounded-lg bg-header p-3"><p className="whitespace-pre-wrap break-words text-sm">{p.body}</p><time className="mt-1 block text-xs text-muted">{new Date(p.createdAt ?? "").toLocaleString(locale === "fa" ? "fa-IR" : "en-US")}</time></article>)}
             {posts.data && posts.data.length === 0 ? <p className="text-sm text-muted">{locale === "fa" ? "هنوز مطلبی منتشر نشده." : "No posts yet."}</p> : null}
           </div>
           {selectedMine && ["owner","admin","editor"].includes(selectedMine.role) ? (

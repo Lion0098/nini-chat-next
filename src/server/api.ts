@@ -2489,6 +2489,22 @@ export const inviteGroupMember = createServerFn({ method: "POST" })
     return ok({ id });
   });
 
+
+export const listMyGroupInvitations = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const sql = await getSql(); await gate(sql, context.userId);
+    return sql<{ id: string; chatId: string; groupTitle: string; invitedBy: string; expiresAt: string }>`
+      select i.id,i.chat_id as "chatId",coalesce(c.title,'') as "groupTitle",
+        coalesce(p.display_name,'') as "invitedBy",i.expires_at as "expiresAt"
+      from group_invitations i
+      join chats c on c.id=i.chat_id and c.kind='group'
+      left join profiles p on p.user_id=i.invited_by
+      where i.invited_user_id=${context.userId} and i.accepted_at is null and i.expires_at>now()
+      order by i.created_at desc limit 50
+    `;
+  });
+
 export const respondGroupInvitation = createServerFn({ method: "POST" })
   .validator((input: unknown) => {
     const o = rec(input); const invitationId = clean(o.invitationId, 80); const accept = Boolean(o.accept);
