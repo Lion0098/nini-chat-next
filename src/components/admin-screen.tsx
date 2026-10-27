@@ -10,6 +10,8 @@ import {
   adminGetDashboard,
   adminListAuditEvents,
   adminSetAdminRole,
+  adminSetUserRestriction,
+  adminRevokeUserSessions,
   adminDeleteGroup,
   adminDeleteUser,
   adminGetSettings,
@@ -200,20 +202,9 @@ export function AdminScreen() {
                           >
                             {t("edit")}
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => void adminSaveUser({
-                              data: { userId: u.userId, role: u.role === "admin" ? "user" : "admin" },
-                            }).then((res) => {
-                              if (!res.ok) toast.error(err(res.error));
-                              else void qc.invalidateQueries({ queryKey: ["admin-users"] });
-                            })}
-                          >
-                            {t("role")}
-                          </button>
                           {dashboard.data?.viewerRole === "owner" ? (
                             <button type="button" className="text-green-2" onClick={() => {
-                              const chosen = window.prompt(locale === "fa" ? "نقش مدیریتی: administrator, moderator, support, auditor" : "Admin role: administrator, moderator, support, auditor", "auditor");
+                              const chosen = window.prompt(locale === "fa" ? "نقش: administrator, moderator, support, auditor یا user برای لغو دسترسی" : "Role: administrator, moderator, support, auditor, or user to revoke", "auditor");
                               if (!chosen) return;
                               void adminSetAdminRole({ data: { userId: u.userId, role: chosen } }).then((res) => {
                                 if (!res.ok) toast.error(err(res.error));
@@ -223,13 +214,28 @@ export function AdminScreen() {
                           ) : null}
                           <button
                             type="button"
-                            onClick={() => void adminSaveUser({ data: { userId: u.userId, suspended: !u.suspended } }).then((res) => {
-                              if (!res.ok) toast.error(err(res.error));
-                              else void qc.invalidateQueries({ queryKey: ["admin-users"] });
-                            })}
+                            onClick={() => {
+                              const suspended = !u.suspended;
+                              const reason = window.prompt(locale === "fa" ? (suspended ? "دلیل مسدودسازی (حداقل ۳ نویسه)" : "یادداشت رفع مسدودی (اختیاری)") : (suspended ? "Restriction reason (at least 3 characters)" : "Unrestriction note (optional)"), "");
+                              if (reason === null) return;
+                              const durationText = suspended ? window.prompt(locale === "fa" ? "مدت به ساعت؛ خالی یعنی بدون انقضا" : "Duration in hours; blank means indefinite", "24") : null;
+                              if (suspended && durationText === null) return;
+                              const durationHours = durationText?.trim() ? Number(durationText) : null;
+                              void adminSetUserRestriction({ data: { userId: u.userId, suspended, reason, durationHours } }).then((res) => {
+                                if (!res.ok) toast.error(err(res.error));
+                                else { toast.success(locale === "fa" ? "وضعیت دسترسی ذخیره شد" : "Access restriction saved"); void qc.invalidateQueries({ queryKey: ["admin-users"] }); void qc.invalidateQueries({ queryKey: ["admin-dashboard"] }); }
+                              });
+                            }}
                           >
                             {u.suspended ? t("unban") : t("ban")}
                           </button>
+                          <button type="button" onClick={() => {
+                            if (!window.confirm(locale === "fa" ? "تمام نشست‌های فعال این کاربر لغو شود؟" : "Revoke all active sessions for this user?")) return;
+                            void adminRevokeUserSessions({ data: { userId: u.userId } }).then((res) => {
+                              if (!res.ok) toast.error(err(res.error));
+                              else toast.success(locale === "fa" ? `تعداد نشست لغوشده: ${res.revokedCount}` : `Sessions revoked: ${res.revokedCount}`);
+                            });
+                          }}>{locale === "fa" ? "لغو نشست‌ها" : "Revoke sessions"}</button>
                           <button
                             type="button"
                             className="text-danger"

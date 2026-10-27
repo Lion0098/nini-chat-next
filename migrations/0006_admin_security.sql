@@ -43,3 +43,17 @@ $$;
 DROP TRIGGER IF EXISTS admin_audit_events_no_update ON admin_audit_events;
 CREATE TRIGGER admin_audit_events_no_update BEFORE UPDATE OR DELETE ON admin_audit_events
 FOR EACH ROW EXECUTE FUNCTION reject_admin_audit_mutation();
+
+
+CREATE TABLE IF NOT EXISTS admin_user_restrictions (
+  id bigserial PRIMARY KEY,
+  user_id text NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  actor_user_id text NOT NULL,
+  reason text NOT NULL CHECK (length(reason) BETWEEN 3 AND 500),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz,
+  revoked_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS admin_user_restrictions_active_idx
+  ON admin_user_restrictions(user_id, created_at DESC)
+  WHERE revoked_at IS NULL;

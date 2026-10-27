@@ -44,3 +44,26 @@ test("admin console exposes dashboard, audit history and owner-only role control
   assert.match(adminUi, /viewerRole === "owner"/);
   assert.match(adminUi, /tab === "audit"/);
 });
+
+
+test("role assignment synchronizes profile role and protects the owner", () => {
+  assert.match(api, /admin\.role_revoked/);
+  assert.match(api, /admin\.role_changed/);
+  assert.match(api, /targetRole === "owner"\) return err\("owner_protected"\)/);
+  assert.match(api, /update profiles set role = 'admin', updated_at = now\(\) where user_id = \$\{data\.userId\}/);
+  assert.match(api, /update profiles set role = 'user', updated_at = now\(\) where user_id = \$\{data\.userId\}/);
+  assert.doesNotMatch(adminUi, /data: \{ userId: u\.userId, role: u\.role === "admin"/);
+});
+
+test("reasoned restrictions support expiration and session revocation with audit events", () => {
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS admin_user_restrictions/);
+  assert.match(migration, /expires_at timestamptz/);
+  assert.match(api, /export const adminSetUserRestriction/);
+  assert.match(api, /reason_required/);
+  assert.match(api, /duration_invalid/);
+  assert.match(api, /user\.restriction_expired/);
+  assert.match(api, /export const adminRevokeUserSessions/);
+  assert.match(api, /user\.sessions_revoked/);
+  assert.match(adminUi, /adminSetUserRestriction/);
+  assert.match(adminUi, /adminRevokeUserSessions/);
+});

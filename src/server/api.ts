@@ -167,7 +167,21 @@ async function ensure(sql: Sql, userId: string): Promise<ProfileRow> {
 }
 
 async function gate(sql: Sql, userId: string): Promise<ProfileRow> {
-  const row = await ensure(sql, userId);
+  let row = await ensure(sql, userId);
+  if (bool(row.suspended)) {
+    const latestRestriction = await sql<{ id: number; expires_at: unknown }>`
+      select id, expires_at from admin_user_restrictions
+      where user_id = ${userId} and revoked_at is null
+      order by created_at desc, id desc limit 1
+    `;
+    const expiry = latestRestriction[0]?.expires_at ? new Date(String(latestRestriction[0].expires_at)).getTime() : null;
+    if (latestRestriction.length && expiry !== null && Number.isFinite(expiry) && expiry <= Date.now()) {
+      await sql`update admin_user_restrictions set revoked_at = now() where id = ${latestRestriction[0].id}`;
+      await sql`update profiles set suspended = false, updated_at = now() where user_id = ${userId}`;
+      await auditAdminEvent(sql, "system", "user.restriction_expired", userId, { restrictionId: latestRestriction[0].id });
+      row = (await profileOf(sql, userId)) ?? row;
+    }
+  }
   if (bool(row.suspended)) throw new Error("suspended");
   return row;
 }
@@ -1850,8 +1864,8 @@ export const adminListAuditEvents = createServerFn({ method: "GET" })
 export const adminSetAdminRole = createServerFn({ method: "POST" })
   .validator((input: unknown) => {
     const o = rec(input); const userId = clean(o.userId, 80); const role = clean(o.role, 24);
-    if (!userId || !["administrator", "moderator", "support", "auditor"].includes(role)) throw new Error("bad_input");
-    return { userId, role: role as Exclude<AdminRole, "owner"> };
+    if (!userId || !["administrator", "moderator", "support", "auditor", "user"].includes(role)) throw new Error("bad_input");
+    return { userId, role: role as Exclude<AdminRole, "owner"> | "user" };
   })
   .middleware([authMiddleware])
   .handler(async ({ context, data }) => {
@@ -1862,9 +1876,58 @@ export const adminSetAdminRole = createServerFn({ method: "POST" })
     if (data.userId === actor.user_id) return err("self");
     const target = await profileOf(sql, data.userId);
     if (!target) return err("not_found");
-    await sql`insert into admin_role_assignments (user_id, role, assigned_by) values (${data.userId}, ${data.role}, ${context.userId}) on conflict (user_id) do update set role = excluded.role, assigned_by = excluded.assigned_by, updated_at = now()`;
-    await auditAdminEvent(sql, context.userId, "admin.role_changed", data.userId, { role: data.role });
+    const targetRole = await adminRoleOf(sql, data.userId);
+    if (targetRole === "owner") return err("owner_protected");
+    if (data.role === "user") {
+      await sql`delete from admin_role_assignments where user_id = ${data.userId}`;
+      await sql`update profiles set role = 'user', updated_at = now() where user_id = ${data.userId}`;
+    } else {
+      await sql`insert into admin_role_assignments (user_id, role, assigned_by) values (${data.userId}, ${data.role}, ${context.userId}) on conflict (user_id) do update set role = excluded.role, assigned_by = excluded.assigned_by, updated_at = now()`;
+      await sql`update profiles set role = 'admin', updated_at = now() where user_id = ${data.userId}`;
+    }
+    await auditAdminEvent(sql, context.userId, data.role === "user" ? "admin.role_revoked" : "admin.role_changed", data.userId, { role: data.role });
     return ok(true);
+  });
+
+
+export const adminSetUserRestriction = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input); const userId = clean(o.userId, 80); const suspended = Boolean(o.suspended);
+    const reason = clean(o.reason, 500); const durationHours = o.durationHours == null || o.durationHours === "" ? null : Number(o.durationHours);
+    if (!userId) throw new Error("bad_input");
+    if (suspended && reason.length < 3) throw new Error("reason_required");
+    if (suspended && durationHours !== null && (!Number.isFinite(durationHours) || durationHours < 1 || durationHours > 8760)) throw new Error("duration_invalid");
+    return { userId, suspended, reason, durationHours };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql(); const actor = await requireAdmin(sql, context.userId);
+    if (data.userId === actor.user_id) return err("self");
+    const target = await profileOf(sql, data.userId); if (!target) return err("not_found");
+    if (target.role === "admin") return err("admin_protected");
+    if (data.suspended) {
+      const expiresAt = data.durationHours === null ? null : new Date(Date.now() + data.durationHours * 3600000).toISOString();
+      await sql`insert into admin_user_restrictions (user_id, actor_user_id, reason, expires_at) values (${data.userId}, ${context.userId}, ${data.reason}, ${expiresAt})`;
+      await sql`update profiles set suspended = true, updated_at = now() where user_id = ${data.userId}`;
+      await auditAdminEvent(sql, context.userId, "user.restricted", data.userId, { reason: data.reason, durationHours: data.durationHours });
+    } else {
+      await sql`update admin_user_restrictions set revoked_at = now() where user_id = ${data.userId} and revoked_at is null`;
+      await sql`update profiles set suspended = false, updated_at = now() where user_id = ${data.userId}`;
+      await auditAdminEvent(sql, context.userId, "user.restriction_revoked", data.userId, { reason: data.reason || "admin_unban" });
+    }
+    return ok(true);
+  });
+
+export const adminRevokeUserSessions = createServerFn({ method: "POST" })
+  .validator((input: unknown) => { const userId = clean(rec(input).userId, 80); if (!userId) throw new Error("bad_input"); return { userId }; })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql(); await requireAdmin(sql, context.userId);
+    if (data.userId === context.userId) return err("self");
+    const target = await profileOf(sql, data.userId); if (!target) return err("not_found");
+    const rows = await sql<{ n: number }>`delete from "session" where "userId" = ${data.userId} returning 1 as n`;
+    await auditAdminEvent(sql, context.userId, "user.sessions_revoked", data.userId, { revokedCount: rows.length });
+    return ok({ revokedCount: rows.length });
   });
 
 export const adminListUsers = createServerFn({ method: "GET" })
@@ -1956,6 +2019,11 @@ export const adminSaveUser = createServerFn({ method: "POST" })
     }
     const role = data.role === undefined ? target.role : clean(data.role, 16) === "admin" ? "admin" : "user";
     const suspended = data.suspended === undefined ? bool(target.suspended) : Boolean(data.suspended);
+    if (data.suspended === true && !bool(target.suspended)) return err("restriction_reason_required");
+    if (data.suspended === false && bool(target.suspended)) {
+      await sql`update admin_user_restrictions set revoked_at = now() where user_id = ${userId} and revoked_at is null`;
+      await auditAdminEvent(sql, context.userId, "user.restriction_revoked", userId, { reason: "admin_unban" });
+    }
     if (userId === admin.user_id && (role !== "admin" || suspended)) return err("self");
     if (target.role === "admin" && role !== "admin") {
       const admins = await sql<{ n: number }>`select count(*)::int as n from profiles where role = 'admin'`;

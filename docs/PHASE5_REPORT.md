@@ -1,22 +1,23 @@
-# Phase 5 — Admin Security and First Console
+# Phase 5 — Admin Security and Console (final implementation pass)
 
-## Implemented in this branch
-- Additive migration `0006_admin_security.sql` introduces scoped admin role assignments: owner, administrator, moderator, support, and auditor.
-- Existing admin profiles are backfilled without changing ordinary accounts; the earliest existing admin is assigned the initial owner role and remaining admins become administrators.
-- The trusted one-time `admin:bootstrap` script grants the explicit initial owner assignment.
-- Legacy privileged console APIs require an explicit owner/administrator assignment in addition to the existing admin profile flag.
-- Added backend-protected dashboard counts, audit-event listing, and owner-only admin-role assignment endpoints.
-- Added dashboard metrics, a read-only audit-history tab, and owner-only role-assignment controls to the admin UI.
-- Added append-only audit storage with a database trigger preventing update/delete, plus audit records for user create/update/delete, role changes, and report status changes. Audit metadata filters credential-like keys and does not store passwords, tokens, OTPs, or API keys.
-- Added static invariant tests for role migration, audit immutability, authorization gates, mutation audit coverage, and UI wiring.
+## Implemented
+- Scoped admin role assignments for owner, administrator, moderator, support and auditor.
+- Explicit owner bootstrap and backend authorization gates for privileged admin APIs.
+- Owner-only role grant/revocation; profile role and explicit assignment remain synchronized; owner cannot be demoted via the console.
+- Dashboard metrics and searchable, read-only audit history.
+- Append-only audit log protected by a database trigger. Credential-like metadata keys are filtered.
+- Audit events for user create/update/delete, role changes/revocation, report status changes, restriction changes/expiry, and session revocation.
+- Reason-required restrictions with optional expiry from 1 hour to 365 days; blank duration means indefinite. Expired restrictions are processed on the restricted user's next authenticated request.
+- Admin UI actions to create/remove restrictions and revoke all sessions for another user.
+- Static invariant tests for migration shape, auth gates, audit protection, UI wiring, role consistency, restrictions, expiry and session revocation.
 
-## Remaining gaps before Phase 5 acceptance
-- The current user-creation screen still uses the existing admin-set password flow. Replacing it with expiring invite/set-password links is not complete.
-- Moderator and support capabilities are not granted access to legacy full-admin mutation endpoints, but their narrowly scoped moderation/support APIs are not implemented yet. Auditor read access is wired for dashboard and audit history.
-- Ban/unban still uses the existing suspension toggle and does not yet capture reason/duration; session revocation is not exposed as a dedicated audited workflow; account timeline is represented by searchable audit events, not a dedicated per-user timeline view.
-- The migration and static tests must still be run in the project's PostgreSQL/PGlite test environment, followed by typecheck/build and authorization integration tests. No production database has been changed.
+## Remaining limitations
+- User creation still uses the existing admin-created password flow; email-delivered, expiring invitation/set-password is not implemented because no mail-delivery integration is configured for this phase.
+- Moderator/support roles can be assigned but do not yet have separate narrowly scoped moderation/support APIs; they cannot use legacy full-admin mutation APIs.
+- Restriction expiry is lazy (processed at the restricted user's next authenticated request), not driven by a background scheduler.
 
 ## Verification
-- `node --check` passed for the new static test file.
-- Static invariant tests passed in an isolated workbench (`5/5`).
-- Full test suite, database migration against PostgreSQL/PGlite, typecheck, and production build have not yet been run for this branch.
+- `node --check` passed for `scripts/admin-security-phase5.test.mjs`.
+- Static invariant tests passed in the isolated workbench: 7 unique tests.
+- Full project test suite, TypeScript typecheck, production build, and execution of migration against PostgreSQL/PGlite could not be run because the isolated workbench does not have the project dependencies installed (`typescript` and `@electric-sql/pglite` are unavailable).
+- No production database was changed. Do not merge this branch until the full project checks pass in CI or a configured development environment.
