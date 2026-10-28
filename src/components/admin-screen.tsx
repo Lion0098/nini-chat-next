@@ -150,8 +150,8 @@ export function AdminScreen() {
         {tab === "audit" ? (
           <section className="space-y-2">
             <p className="text-xs text-muted">{locale === "fa" ? "این رویدادها فقط خواندنی هستند؛ اطلاعات محرمانه در جزئیات ثبت نمی‌شوند." : "Read-only events. Secret values are not included in event metadata."}</p>
-            {(audit.data?.events ?? []).length === 0 ? <p className="rounded-xl bg-panel p-4 text-sm text-muted">{locale === "fa" ? "رویدادی پیدا نشد." : "No events found."}</p> : null}
-            {(audit.data?.events ?? []).map((event) => (
+            {(audit.data?.ok ? audit.data.data.events : []).length === 0 ? <p className="rounded-xl bg-panel p-4 text-sm text-muted">{locale === "fa" ? "رویدادی پیدا نشد." : "No events found."}</p> : null}
+            {(audit.data?.ok ? audit.data.data.events : []).map((event) => (
               <article key={event.id} className="rounded-xl bg-panel p-3 text-sm">
                 <div className="flex flex-wrap justify-between gap-2"><strong>{event.action}</strong><time className="text-muted">{formatChatTime(event.createdAt, locale, t)}</time></div>
                 <p className="mt-1 text-muted">{locale === "fa" ? "عامل:" : "Actor:"} {event.actorName} · {locale === "fa" ? "هدف:" : "Target:"} {event.targetName || event.targetUserId || "—"}</p>
@@ -257,7 +257,7 @@ export function AdminScreen() {
                             if (!window.confirm(locale === "fa" ? "تمام نشست‌های فعال این کاربر لغو شود؟" : "Revoke all active sessions for this user?")) return;
                             void adminRevokeUserSessions({ data: { userId: u.userId } }).then((res) => {
                               if (!res.ok) toast.error(err(res.error));
-                              else toast.success(locale === "fa" ? `تعداد نشست لغوشده: ${res.revokedCount}` : `Sessions revoked: ${res.revokedCount}`);
+                              else toast.success(locale === "fa" ? `تعداد نشست لغوشده: ${res.data.revokedCount}` : `Sessions revoked: ${res.data.revokedCount}`);
                             });
                           }}>{locale === "fa" ? "لغو نشست‌ها" : "Revoke sessions"}</button>
                           <button

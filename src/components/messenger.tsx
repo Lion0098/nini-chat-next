@@ -955,6 +955,7 @@ function ChannelsPanel() {
   const mine = useQuery({ queryKey: ["my-channels"], queryFn: () => listMyChannels() });
   const publicList = useQuery({ queryKey: ["public-channels"], queryFn: () => listPublicChannels() });
   const posts = useQuery({ queryKey: ["channel-posts", selected], queryFn: () => listChannelPosts({ data: { channelId: selected ?? "" } }), enabled: Boolean(selected) });
+  const channelPosts = posts.data?.ok ? posts.data.data : [];
   const groupInvites = useQuery({ queryKey: ["group-invitations"], queryFn: () => listMyGroupInvitations() });
   const selectedMine = (mine.data ?? []).find((c) => c.id === selected);
   async function create() {
@@ -1025,8 +1026,8 @@ function ChannelsPanel() {
         <div className="space-y-3 border-t border-line pt-3">
           <div className="font-semibold">{selectedMine?.title ?? (locale === "fa" ? "کانال انتخاب‌شده" : "Selected channel")}</div>
           <div className="max-h-64 space-y-2 overflow-y-auto">
-            {(posts.data ?? []).map((p) => <article key={p.id} className="rounded-lg bg-header p-3"><p className="whitespace-pre-wrap break-words text-sm">{p.body}</p><time className="mt-1 block text-xs text-muted">{new Date(p.createdAt ?? "").toLocaleString(locale === "fa" ? "fa-IR" : "en-US")}</time></article>)}
-            {posts.data && posts.data.length === 0 ? <p className="text-sm text-muted">{locale === "fa" ? "هنوز مطلبی منتشر نشده." : "No posts yet."}</p> : null}
+            {channelPosts.map((p) => <article key={p.id} className="rounded-lg bg-header p-3"><p className="whitespace-pre-wrap break-words text-sm">{p.body}</p><time className="mt-1 block text-xs text-muted">{new Date(p.createdAt ?? "").toLocaleString(locale === "fa" ? "fa-IR" : "en-US")}</time></article>)}
+            {posts.data?.ok && channelPosts.length === 0 ? <p className="text-sm text-muted">{locale === "fa" ? "هنوز مطلبی منتشر نشده." : "No posts yet."}</p> : null}
           </div>
           {selectedMine && ["owner","admin","editor"].includes(selectedMine.role) ? (
             <div className="space-y-2">

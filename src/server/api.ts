@@ -1873,7 +1873,7 @@ export const adminListAuditEvents = createServerFn({ method: "GET" })
          or lower(coalesce(t.display_name, '')) like ${q} or e.target_user_id like ${q}
       order by e.created_at desc, e.id desc limit ${data.limit}
     `;
-    return { viewerRole: role, events: rows.map((r) => ({ id: r.id, actorUserId: r.actor_user_id, actorName: r.actor_name || r.actor_user_id, action: r.action, targetUserId: r.target_user_id, targetName: r.target_name, details: r.details, createdAt: iso(r.created_at) })) };
+    return ok({ viewerRole: role, events: rows.map((r) => ({ id: r.id, actorUserId: r.actor_user_id, actorName: r.actor_name || r.actor_user_id, action: r.action, targetUserId: r.target_user_id, targetName: r.target_name, details: r.details == null ? null : JSON.parse(JSON.stringify(r.details)), createdAt: iso(r.created_at) })) });
   });
 
 export const adminSetAdminRole = createServerFn({ method: "POST" })
@@ -2149,9 +2149,10 @@ export const moderatorListReports = createServerFn({ method: "GET" })
     const sql = await getSql();
     await requireAssignedRole(sql, context.userId, ["owner", "administrator", "moderator"]);
     const status = ["open", "reviewed", "dismissed"].includes(data.status) ? data.status : "";
-    return await sql<{ id: string; reason: string; details: string | null; status: string; target_user_id: string | null; created_at: unknown }>`
-      select id, reason, details, status, target_user_id, created_at from reports
-      where ${status} = '' or status = ${status} order by created_at desc limit 100`;
+    const rows = await sql<{ id: string; reason: string; details: string | null; status: string; target_user_id: string | null; created_at: unknown }>`
+       select id, reason, details, status, target_user_id, created_at from reports
+       where ${status} = '' or status = ${status} order by created_at desc limit 100`;
+     return rows.map((row) => ({ id: row.id, reason: row.reason, details: row.details, status: row.status, targetUserId: row.target_user_id, createdAt: iso(row.created_at) }));
   });
 
 export const moderatorSetReportStatus = createServerFn({ method: "POST" })
