@@ -9,6 +9,7 @@ import { Route as AdminRouteImport } from './routes/admin'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppealsRouteImport } from './routes/appeals'
 import { Route as SmsSettingsRouteImport } from './routes/sms-settings'
+import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as ApiRtcRouteImport } from './routes/api/rtc'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 
@@ -17,13 +18,14 @@ const AdminRoute = AdminRouteImport.update({ id: '/admin', path: '/admin', getPa
 const LoginRoute = LoginRouteImport.update({ id: '/login', path: '/login', getParentRoute: () => rootRouteImport } as any)
 const AppealsRoute = AppealsRouteImport.update({ id: '/appeals', path: '/appeals', getParentRoute: () => rootRouteImport } as any)
 const SmsSettingsRoute = SmsSettingsRouteImport.update({ id: '/sms-settings', path: '/sms-settings', getParentRoute: () => rootRouteImport } as any)
+const ApiHealthRoute = ApiHealthRouteImport.update({ id: '/api/health', path: '/api/health', getParentRoute: () => rootRouteImport } as any)
 const ApiRtcRoute = ApiRtcRouteImport.update({ id: '/api/rtc', path: '/api/rtc', getParentRoute: () => rootRouteImport } as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({ id: '/api/auth/$', path: '/api/auth/$', getParentRoute: () => rootRouteImport } as any)
 
-export interface FileRoutesByFullPath { '/': typeof IndexRoute; '/admin': typeof AdminRoute; '/login': typeof LoginRoute; '/appeals': typeof AppealsRoute; '/sms-settings': typeof SmsSettingsRoute; '/api/rtc': typeof ApiRtcRoute; '/api/auth/$': typeof ApiAuthSplatRoute }
-export interface FileRoutesByTo { '/': typeof IndexRoute; '/admin': typeof AdminRoute; '/login': typeof LoginRoute; '/appeals': typeof AppealsRoute; '/sms-settings': typeof SmsSettingsRoute; '/api/rtc': typeof ApiRtcRoute; '/api/auth/$': typeof ApiAuthSplatRoute }
-export interface FileRoutesById { __root__: typeof rootRouteImport; '/': typeof IndexRoute; '/admin': typeof AdminRoute; '/login': typeof LoginRoute; '/appeals': typeof AppealsRoute; '/sms-settings': typeof SmsSettingsRoute; '/api/rtc': typeof ApiRtcRoute; '/api/auth/$': typeof ApiAuthSplatRoute }
-export interface FileRouteTypes { fileRoutesByFullPath: FileRoutesByFullPath; fullPaths: '/' | '/admin' | '/login' | '/appeals' | '/sms-settings' | '/api/rtc' | '/api/auth/$'; fileRoutesByTo: FileRoutesByTo; to: '/' | '/admin' | '/login' | '/appeals' | '/sms-settings' | '/api/rtc' | '/api/auth/$'; id: '__root__' | '/' | '/admin' | '/login' | '/appeals' | '/sms-settings' | '/api/rtc' | '/api/auth/$'; fileRoutesById: FileRoutesById }
+export interface FileRoutesByFullPath { '/': typeof IndexRoute; '/admin': typeof AdminRoute; '/login': typeof LoginRoute; '/appeals': typeof AppealsRoute; '/sms-settings': typeof SmsSettingsRoute; '/api/health': typeof ApiHealthRoute; '/api/rtc': typeof ApiRtcRoute; '/api/auth/$': typeof ApiAuthSplatRoute }
+export interface FileRoutesByTo { '/': typeof IndexRoute; '/admin': typeof AdminRoute; '/login': typeof LoginRoute; '/appeals': typeof AppealsRoute; '/sms-settings': typeof SmsSettingsRoute; '/api/health': typeof ApiHealthRoute; '/api/rtc': typeof ApiRtcRoute; '/api/auth/$': typeof ApiAuthSplatRoute }
+export interface FileRoutesById { __root__: typeof rootRouteImport; '/': typeof IndexRoute; '/admin': typeof AdminRoute; '/login': typeof LoginRoute; '/appeals': typeof AppealsRoute; '/sms-settings': typeof SmsSettingsRoute; '/api/health': typeof ApiHealthRoute; '/api/rtc': typeof ApiRtcRoute; '/api/auth/$': typeof ApiAuthSplatRoute }
+export interface FileRouteTypes { fileRoutesByFullPath: FileRoutesByFullPath; fullPaths: '/' | '/admin' | '/login' | '/appeals' | '/sms-settings' | '/api/health' | '/api/rtc' | '/api/auth/$'; fileRoutesByTo: FileRoutesByTo; to: '/' | '/admin' | '/login' | '/appeals' | '/sms-settings' | '/api/health' | '/api/rtc' | '/api/auth/$'; id: '__root__' | '/' | '/admin' | '/login' | '/appeals' | '/sms-settings' | '/api/health' | '/api/rtc' | '/api/auth/$'; fileRoutesById: FileRoutesById }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
@@ -32,11 +34,12 @@ declare module '@tanstack/react-router' {
     '/login': { id: '/login'; path: '/login'; fullPath: '/login'; preLoaderRoute: typeof LoginRouteImport; parentRoute: typeof rootRouteImport }
     '/appeals': { id: '/appeals'; path: '/appeals'; fullPath: '/appeals'; preLoaderRoute: typeof AppealsRouteImport; parentRoute: typeof rootRouteImport }
     '/sms-settings': { id: '/sms-settings'; path: '/sms-settings'; fullPath: '/sms-settings'; preLoaderRoute: typeof SmsSettingsRouteImport; parentRoute: typeof rootRouteImport }
+    '/api/health': { id: '/api/health'; path: '/api/health'; fullPath: '/api/health'; preLoaderRoute: typeof ApiHealthRouteImport; parentRoute: typeof rootRouteImport }
     '/api/rtc': { id: '/api/rtc'; path: '/api/rtc'; fullPath: '/api/rtc'; preLoaderRoute: typeof ApiRtcRouteImport; parentRoute: typeof rootRouteImport }
     '/api/auth/$': { id: '/api/auth/$'; path: '/api/auth/$'; fullPath: '/api/auth/$'; preLoaderRoute: typeof ApiAuthSplatRouteImport; parentRoute: typeof rootRouteImport }
   }
 }
-const rootRouteChildren = { IndexRoute, AdminRoute, LoginRoute, AppealsRoute, SmsSettingsRoute, ApiRtcRoute, ApiAuthSplatRoute }
+const rootRouteChildren = { IndexRoute, AdminRoute, LoginRoute, AppealsRoute, SmsSettingsRoute, ApiHealthRoute, ApiRtcRoute, ApiAuthSplatRoute }
 export const routeTree = rootRouteImport._addFileChildren(rootRouteChildren)._addFileTypes<FileRouteTypes>()
 
 import type { getRouter } from './router.tsx'
