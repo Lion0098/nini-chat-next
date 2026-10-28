@@ -2173,13 +2173,14 @@ export const supportFindUser = createServerFn({ method: "GET" })
     const sql = await getSql(); await requireAssignedRole(sql, context.userId, ["owner", "administrator", "support"]);
     if (data.q.length < 3) return [];
     const like = `%${data.q.replace(/[%_]/g, "")}%`;
-    return await sql<{ id: string; email: string; display_name: string | null; username: string | null; suspended: unknown; created_at: unknown }>`
+    const rows = await sql<{ id: string; email: string; display_name: string | null; username: string | null; suspended: unknown; created_at: unknown }>`
       select u.id, u.email, p.display_name, p.username, p.suspended, u."createdAt" as created_at
       from "user" u left join profiles p on p.user_id = u.id
       where lower(u.email) like ${like}
          or lower(coalesce(p.username, '')) like ${like}
          or lower(coalesce(p.display_name, u.name)) like ${like}
       order by u."createdAt" desc limit 20`;
+    return rows.map((row) => ({ id: row.id, email: row.email, displayName: row.display_name, username: row.username, suspended: Boolean(row.suspended), createdAt: iso(row.created_at) }));
   });
 
 export const supportRevokeUserSessions = createServerFn({ method: "POST" })
@@ -2590,7 +2591,7 @@ export const getGroupMembershipHistory = createServerFn({ method: "GET" })
     const member = await memberRole(sql, data.chatId, context.userId);
     if (!member || !["owner", "admin"].includes(member.role)) return err("forbidden");
     const rows = await sql<{ id: number; subject_user_id: string; actor_user_id: string | null; action: string; old_role: string | null; new_role: string | null; details: unknown; created_at: unknown }>`select id,subject_user_id,actor_user_id,action,old_role,new_role,details,created_at from group_membership_history where chat_id = ${data.chatId} order by created_at desc,id desc limit ${data.limit}`;
-    return ok(rows.map(r => ({ id: r.id, subjectUserId: r.subject_user_id, actorUserId: r.actor_user_id, action: r.action, oldRole: r.old_role, newRole: r.new_role, details: r.details, createdAt: iso(r.created_at) })));
+    return ok(rows.map(r => ({ id: r.id, subjectUserId: r.subject_user_id, actorUserId: r.actor_user_id, action: r.action, oldRole: r.old_role, newRole: r.new_role, details: r.details == null ? null : JSON.parse(JSON.stringify(r.details)), createdAt: iso(r.created_at) })));
   });
 
 // Channels have their own tables and permissions; subscribers cannot publish or manage members.
@@ -2716,7 +2717,8 @@ export const getChannelMembershipHistory = createServerFn({ method: "GET" })
     const sql = await getSql(); await gate(sql, context.userId);
     const actor = await sql<{ role: string }>`select role from channel_members where channel_id=${data.channelId} and user_id=${context.userId}`;
     if (!actor[0] || !["owner","admin"].includes(actor[0].role)) return err("forbidden");
-    return ok(await sql`select id,subject_user_id as "subjectUserId",actor_user_id as "actorUserId",action,old_role as "oldRole",new_role as "newRole",created_at as "createdAt" from channel_membership_history where channel_id=${data.channelId} order by created_at desc,id desc limit 100`);
+    const rows = await sql<{ id: number; subjectUserId: string; actorUserId: string | null; action: string; oldRole: string | null; newRole: string | null; createdAt: unknown }>`select id,subject_user_id as "subjectUserId",actor_user_id as "actorUserId",action,old_role as "oldRole",new_role as "newRole",created_at as "createdAt" from channel_membership_history where channel_id=${data.channelId} order by created_at desc,id desc limit 100`;
+    return ok(rows.map((row) => ({ ...row, createdAt: iso(row.createdAt) })));
   });
 
 export const listPublicChannels = createServerFn({ method: "GET" })
