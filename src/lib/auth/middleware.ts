@@ -48,32 +48,35 @@ export const authMiddleware = createMiddleware({ type: "function" })
     // authenticated server-function request (not just displayed in Settings).
     // Keep a privileged recovery path so an unverified admin can turn a bad
     // policy off instead of locking the installation permanently.
-    try {
-      const { getSql } = await import("@/lib/db");
-      const sql = await getSql();
-      const rows = await sql<{ email: string; email_verified: boolean; phone_verified: boolean; role: string | null }>`
-        select u.email, u."emailVerified" as email_verified,
-               coalesce(u."phoneNumberVerified", false) as phone_verified,
-               p.role
-        from "user" u left join profiles p on p.user_id = u.id
-        where u.id = ${userId} limit 1`;
-      const current = rows[0];
-      if (current && !["admin", "owner", "administrator"].includes(current.role ?? "")) {
-        const settings = await sql<{ key: string; value: string }>`
+    const { getSql } = await import("@/lib/db");
+    const sql = await getSql();
+    const rows = await sql<{ email: string; email_verified: boolean; phone_verified: boolean; role: string | null }>`
+      select u.email, u."emailVerified" as email_verified,
+             coalesce(u."phoneNumberVerified", false) as phone_verified,
+             p.role
+      from "user" u left join profiles p on p.user_id = u.id
+      where u.id = ${userId} limit 1`;
+    const current = rows[0];
+    if (current && !["admin", "owner", "administrator"].includes(current.role ?? "")) {
+      let settings: { key: string; value: string }[] = [];
+      try {
+        settings = await sql<{ key: string; value: string }>`
           select key, value from system_settings
           where key in ('require_email_verification', 'require_phone_verification')`;
-        const policy = new Map(settings.map((row) => [row.key, row.value]));
-        const isPhoneOnlyAccount = current.email.endsWith("@phone.nini.invalid");
-        if (policy.get("require_email_verification") === "true" && !current.email_verified && !isPhoneOnlyAccount) {
-          throw new Error("email_verification_required");
-        }
-        if (policy.get("require_phone_verification") === "true" && !current.phone_verified) {
-          throw new Error("phone_verification_required");
-        }
+      } catch (error) {
+        // Old deployments without the Phase 7 migration retain the default-off
+        // policy. Do not swallow connection/query failures or unrelated errors.
+        const message = error instanceof Error ? error.message : String(error);
+        if (!/system_settings.*does not exist|relation .*system_settings.*does not exist/i.test(message)) throw error;
       }
-    } catch (error) {
-      if (error instanceof Error && /^(email|phone)_verification_required$/.test(error.message)) throw error;
-      // Older installations without Phase 7 migrations retain the default-off policy.
+      const policy = new Map(settings.map((row) => [row.key, row.value]));
+      const isPhoneOnlyAccount = current.email.endsWith("@phone.nini.invalid");
+      if (policy.get("require_email_verification") === "true" && !current.email_verified && !isPhoneOnlyAccount) {
+        throw new Error("email_verification_required");
+      }
+      if (policy.get("require_phone_verification") === "true" && !current.phone_verified) {
+        throw new Error("phone_verification_required");
+      }
     }
     return next({ context: { userId } });
   });
