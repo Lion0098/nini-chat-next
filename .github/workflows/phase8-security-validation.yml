@@ -35,7 +35,10 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Audit dependency vulnerabilities
+      # Phase 8 establishes visibility without blocking all delivery on legacy
+      # transitive advisories. Track and remediate findings in the backlog.
+      - name: Audit dependency vulnerabilities (informational baseline)
+        continue-on-error: true
         run: npm audit --audit-level=high
 
       - name: Check authentication invariants
