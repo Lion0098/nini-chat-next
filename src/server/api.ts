@@ -2977,6 +2977,25 @@ export const adminGetOperationalStatus = createServerFn({ method: "GET" })
         checks.push({ name: "announcements", status: "warning", detail: "Announcement storage is unavailable; confirm Phase 7 migrations have been applied." });
       }
       try {
+        const requiredTables = ["system_settings", "system_announcements", "moderation_appeals", "moderation_report_notes", "ops_check_events", "auth_rate_limit_buckets"];
+        const rows = await sql<{ table_name: string }>`select table_name from information_schema.tables where table_schema = 'public' and table_name in ('system_settings','system_announcements','moderation_appeals','moderation_report_notes','ops_check_events','auth_rate_limit_buckets')`;
+        const present = new Set(rows.map((row) => row.table_name));
+        const missing = requiredTables.filter((name) => !present.has(name));
+        checks.push({ name: "phase7_schema", status: missing.length ? "warning" : "ok", detail: missing.length ? `Missing Phase 7 tables: ${missing.join(", ")}.` : "All required Phase 7 tables are present." });
+      } catch {
+        checks.push({ name: "phase7_schema", status: "warning", detail: "Could not verify Phase 7 migration tables." });
+      }
+      const emailConfigured = Boolean(process.env.RESEND_API_KEY?.trim() && process.env.RESEND_FROM_EMAIL?.trim());
+      checks.push({ name: "email_provider", status: emailConfigured ? "ok" : "warning", detail: emailConfigured ? "Email provider credentials and sender are configured; delivery was not tested." : "Email provider is not configured; set RESEND_API_KEY and RESEND_FROM_EMAIL." });
+      try {
+        const smsRows = await sql<{ key: string; value: string }>`select key, value from system_settings where key in ('sms_provider','sms_enabled','sms_api_key_encrypted','sms_ir_template_id')`;
+        const sms = new Map(smsRows.map((row) => [row.key, row.value]));
+        const smsReady = (sms.get("sms_provider") || "sms_ir") === "sms_ir" && sms.get("sms_enabled") === "true" && Boolean(sms.get("sms_api_key_encrypted") || process.env.SMS_IR_API_KEY_SANDBOX?.trim() || process.env.SMS_IR_API_KEY_PRODUCTION?.trim()) && Boolean(sms.get("sms_ir_template_id") || process.env.SMS_IR_TEMPLATE_ID?.trim());
+        checks.push({ name: "sms_provider", status: smsReady ? "ok" : "warning", detail: smsReady ? "SMS.ir settings appear configured; delivery was not tested." : "SMS.ir is not fully configured or enabled in Admin > SMS settings." });
+      } catch {
+        checks.push({ name: "sms_provider", status: "warning", detail: "Could not read SMS provider settings; confirm Phase 7 migrations have been applied." });
+      }
+      try {
         const worst = checks.some((c) => c.status === "error") ? "error" : checks.some((c) => c.status === "warning") ? "warning" : "ok";
         await sql`insert into ops_check_events(check_name, status, details) values ('admin_operational_status', ${worst}, ${JSON.stringify({ checkCount: checks.length })}::jsonb)`;
       } catch {
