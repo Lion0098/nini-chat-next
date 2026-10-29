@@ -1,0 +1,54 @@
+name: Phase 8 security and reliability validation
+
+on:
+  push:
+    branches:
+      - phase8/security-reliability
+  pull_request:
+    branches:
+      - main
+      - phase7/platform-settings-ops
+      - phase8/security-reliability
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase8-security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security-and-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Audit dependency vulnerabilities
+        run: npm audit --audit-level=high
+
+      - name: Check authentication invariants
+        run: npm run check:auth
+
+      - name: TypeScript check
+        run: npm run typecheck
+
+      - name: Unit and contract tests
+        run: npm test
+
+      - name: Phase 7 migration contract checks
+        run: node --test scripts/phase7-migration.test.mjs
+
+      - name: Production build
+        run: npm run build
