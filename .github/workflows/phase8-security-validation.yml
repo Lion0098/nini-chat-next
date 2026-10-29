@@ -35,14 +35,41 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      # Phase 8 establishes visibility without blocking all delivery on legacy
-      # transitive advisories. Track and remediate findings in the backlog.
+      # Keep dependency advisories visible without blocking the baseline validation run.
       - name: Audit dependency vulnerabilities (informational baseline)
         continue-on-error: true
         run: npm audit --audit-level=high
 
       - name: Check authentication invariants
-        run: npm run check:auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run dev > /tmp/phase8-vite-dev.log 2>&1 &
+          DEV_SERVER_PID=$!
+          cleanup() {
+            kill "$DEV_SERVER_PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/__app-env >/dev/null; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$DEV_SERVER_PID" 2>/dev/null; then
+              cat /tmp/phase8-vite-dev.log
+              echo "Vite dev server exited before becoming ready" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          if [ "$ready" -ne 1 ]; then
+            cat /tmp/phase8-vite-dev.log
+            echo "Timed out waiting for Vite dev server at 127.0.0.1:8080" >&2
+            exit 1
+          fi
+          npm run check:auth -- --dev-url http://127.0.0.1:8080
 
       - name: TypeScript check
         run: npm run typecheck
