@@ -414,7 +414,7 @@ function insertBeforeHeadClose(html, snippet) {
 }
 
 export function normalizeHeadContext(ctx = {}) {
-  const cwd = ctx.cwd ?? process.cwd();
+  const cwd = ctx.cwd ?? "/__grok_no_workspace_context__";
   // Production entrypoints pass cwd explicitly so filesystem assets and site
   // configuration are snapshotted. Pure helper calls without cwd stay isolated
   // from the caller's workspace, which keeps tests and embedded consumers
