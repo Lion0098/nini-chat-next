@@ -4,11 +4,13 @@ on:
   push:
     branches:
       - phase8/security-reliability
+      - phase9/project-audit
   pull_request:
     branches:
       - main
       - phase7/platform-settings-ops
       - phase8/security-reliability
+      - phase9/project-audit
   workflow_dispatch:
 
 permissions:
