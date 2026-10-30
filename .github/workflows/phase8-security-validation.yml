@@ -5,12 +5,14 @@ on:
     branches:
       - phase8/security-reliability
       - phase9/project-audit
+      - phase10/vps-file-storage
   pull_request:
     branches:
       - main
       - phase7/platform-settings-ops
       - phase8/security-reliability
       - phase9/project-audit
+      - phase10/vps-file-storage
   workflow_dispatch:
 
 permissions:
