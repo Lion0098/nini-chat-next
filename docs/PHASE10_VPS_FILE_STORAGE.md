@@ -1,40 +1,10 @@
-# فاز ۱۰ — ذخیره‌سازی فایل روی VPS و مدیریت سهمیه
+# Phase 10.1 — quota and backup groundwork
 
-## هدف
-فایل‌های باینری از PostgreSQL خارج شوند و روی دیسک VPS، بیرون از webroot، نگهداری شوند. دیتابیس فقط metadata، مالکیت، مجوز، سهمیه و وضعیت اسکن را نگه می‌دارد.
+This increment adds per-user quota override records, an upload accounting ledger, and a nullable stored-file relation on messages. It also adds signature detection for common safe media/document types. Unknown signatures intentionally fail closed. The local storage path is now rejected if it resolves under the app public web root.
 
-## شاخه
-`phase10/vps-file-storage` بر پایه `phase9/project-audit`. این فاز تا تکمیل و بررسی PR نباید روی `main` یا production اعمال شود.
+## Backups
+The backup script is opt-in and runs only when an operator invokes it on the VPS. Inject BACKUP_PASSPHRASE from a secret manager; never store it in this repository, cron text, or shell history. Configure NINI_STORAGE_ROOT, BACKUP_DIR, RETENTION_DAYS and optionally OFFSITE_DIR. It creates an AES-256-CBC encrypted tar archive and SHA-256 sidecar.
 
-## تصمیم‌های معماری
-- مسیر پیش‌فرض production: `/var/lib/nini-chat/storage`؛ قابل تنظیم با `NINI_STORAGE_ROOT`.
-- فایل‌ها با UUID ذخیره می‌شوند؛ نام اصلی فقط metadata است.
-- پوشه‌ها با مجوز محدود و فایل‌ها با mode 0600 ساخته می‌شوند.
-- دسترسی دانلود باید از handler احراز هویت‌شده و پس از کنترل عضویت چت عبور کند؛ مسیر فایل یا absolute path به کلاینت داده نمی‌شود.
-- دیتابیس هیچ محتوای باینری/Base64 جدیدی دریافت نمی‌کند.
-- migration شماره 0010 جدول metadata، سیاست فرمت و تنظیمات اولیه را می‌سازد.
-- فرمت‌های اجرایی و active content به‌صورت پیش‌فرض غیرفعال هستند. فعال‌کردن آن‌ها به معنی اجرا نیست؛ فایل‌ها فقط به‌عنوان attachment تحویل می‌شوند.
+This script backs up blobs only, not PostgreSQL. Back up the database separately with encrypted pg_dump output, coordinate blob/database snapshots, copy both off-site, and test restore into a separate staging directory before relying on them. Never restore over a live storage root without preserving the current directory and using a maintenance window.
 
-## مراحل پیاده‌سازی
-1. زیرساخت فایل‌سیستم و schema metadata (این commit).
-2. API آپلود/دانلود امن، اعتبارسنجی signature، quota اتمیک و کنترل عضویت.
-3. اتصال UI چت و avatar/status به metadata به‌جای Base64.
-4. پنل مدیریت فرمت‌ها، حجم‌ها، سهمیه‌ها و آمار.
-5. مهاجرت فایل‌های Base64 قبلی با dry-run، checksum و rollback؛ حذف داده قدیمی فقط پس از تطبیق کامل.
-6. اسکریپت بکاپ رمزنگاری‌شده، retention و تست restore روی محیط دورریختنی.
-7. تست CI و تست مرورگر؛ سپس راهنمای استقرار VPS.
-
-## ایمنی و محدودیت‌های این مرحله
-- این commit هنوز مسیرهای موجود آپلود/دانلود را به storage adapter وصل نمی‌کند؛ تا تکمیل مرحله ۲، `file_storage_enabled` عمداً false است.
-- هیچ تغییری روی VPS، دیتابیس واقعی یا production انجام نشده است.
-- هیچ رسانه قدیمی حذف یا جابه‌جا نشده است.
-- محدودیت reverse proxy و Node body size باید با سقف فرمت‌ها هم‌راستا شود.
-- بکاپ روی همان VPS به‌تنهایی disaster recovery محسوب نمی‌شود؛ نسخه دوم مستقل توصیه می‌شود.
-
-## معیارهای پذیرش نهایی
-- فایل باینری جدید در DB ذخیره نشود.
-- هیچ فایل upload شده از webroot قابل اجرا/دسترسی مستقیم نباشد.
-- عضویت و مجوز در هر download مجدداً بررسی شود.
-- سقف فرمت و سهمیه در سمت سرور، در برابر درخواست هم‌زمان، enforce شود.
-- حذف پیام/حساب، فایل orphan باقی نگذارد.
-- backup و restore، metadata و bytes را با checksum تطبیق دهند.
+No VPS commands, production migrations, backups, or data movement were run by this commit. file_storage_enabled remains false and uploads still use the legacy database Base64 path. Quota enforcement, API cutover, admin controls, legacy migration and automated restore tests remain to be implemented.
