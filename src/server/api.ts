@@ -1,5 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { createHash, randomBytes } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { detectFileType, storeFile, getStoredFilePath, deleteStoredFile, type StorageCategory } from "@/lib/file-storage";
 import { sendAdminInvitationEmail } from "@/lib/email/resend";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { getSql, type Sql } from "@/lib/db";
@@ -237,6 +239,20 @@ async function maxBytes(sql: Sql): Promise<number> {
   const n = Number(await setting(sql, "max_upload_bytes", "2000000"));
   if (!Number.isFinite(n)) return 2_000_000;
   return Math.min(4_000_000, Math.max(100_000, Math.floor(n)));
+}
+
+
+const STORAGE_KIND: Record<string, StorageCategory> = { image:"images", video:"videos", audio:"audio", file:"documents" };
+function safeOriginalName(value:unknown):string{return clean(value,120).replace(/[\\\\/]/g,"").replace(/\\.{2,}/g,".")||"file";}
+function extensionOf(name:string):string{const dot=name.lastIndexOf(".");return dot>0?name.slice(dot+1).toLowerCase():"";}
+async function enforceStorageQuota(sql:Sql,userId:string,size:number):Promise<boolean>{
+ const rows=await sql<{daily_bytes:number|null;weekly_bytes:number|null;monthly_bytes:number|null;max_file_bytes:number|null;disabled:unknown}>`select daily_bytes,weekly_bytes,monthly_bytes,max_file_bytes,disabled from file_user_quota_overrides where user_id=${userId}`;
+ const o=rows[0];if(o&&bool(o.disabled))return false;
+ const limits={daily:o?.daily_bytes==null?Number(await setting(sql,"file_upload_daily_quota_bytes","536870912")):num(o.daily_bytes),weekly:o?.weekly_bytes==null?Number(await setting(sql,"file_upload_weekly_quota_bytes","2147483648")):num(o.weekly_bytes),monthly:o?.monthly_bytes==null?Number(await setting(sql,"file_upload_monthly_quota_bytes","5368709120")):num(o.monthly_bytes)};
+ if(o?.max_file_bytes!=null&&size>num(o.max_file_bytes))return false;
+ const usage=await sql<{daily:number;weekly:number;monthly:number}>`select coalesce(sum(size_bytes) filter(where reserved_at>=now()-interval '1 day' and state in ('reserved','committed')),0)::bigint as daily,coalesce(sum(size_bytes) filter(where reserved_at>=now()-interval '7 days' and state in ('reserved','committed')),0)::bigint as weekly,coalesce(sum(size_bytes) filter(where reserved_at>=now()-interval '30 days' and state in ('reserved','committed')),0)::bigint as monthly from file_upload_usage where user_id=${userId}`;
+ const u=usage[0]??{daily:0,weekly:0,monthly:0};
+ return (limits.daily<=0||num(u.daily)+size<=limits.daily)&&(limits.weekly<=0||num(u.weekly)+size<=limits.weekly)&&(limits.monthly<=0||num(u.monthly)+size<=limits.monthly);
 }
 
 function approxBytes(b64: string): number {
@@ -1014,18 +1030,29 @@ export const sendMessage = createServerFn({ method: "POST" })
     if (num(recent[0]?.n) > 40) return err("rate");
     const body = clean(data.body, 4000);
     if (kind === "text" && !body) return err("empty");
-    let fileName: string | null = null;
-    let fileMime: string | null = null;
-    let fileData: string | null = null;
-    let fileSize: number | null = null;
-    if (kind !== "text") {
-      fileMime = clean(data.fileMime, 80).toLowerCase();
-      fileName = clean(data.fileName, 120).replace(/[\\/]/g, "") || "file";
-      fileData = typeof data.fileData === "string" ? data.fileData.replace(/\s/g, "") : "";
-      if (!mimeOk(kind, fileMime) || !/^[A-Za-z0-9+/=]+$/.test(fileData)) return err("bad_type");
-      fileSize = approxBytes(fileData);
-      const cap = await maxBytes(sql);
-      if (fileSize > cap) return err("too_large");
+    let fileName:string|null=null,fileMime:string|null=null,fileData:string|null=null,fileSize:number|null=null;
+    let storedObject:Awaited<ReturnType<typeof storeFile>>|null=null,storedExtension="",storedCategory:StorageCategory|null=null;
+    const useDiskStorage=kind!=="text"&&(await setting(sql,"file_storage_enabled","false"))==="true";
+    if(kind!=="text"){
+      fileMime=clean(data.fileMime,80).toLowerCase();fileName=safeOriginalName(data.fileName);
+      const encoded=typeof data.fileData==="string"?data.fileData.replace(/\\s/g,""):"";
+      if(!mimeOk(kind,fileMime)||!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded))return err("bad_type");
+      fileSize=approxBytes(encoded);
+      const cap=Math.min(500*1024*1024,Math.max(100_000,Number(await setting(sql,"file_upload_default_max_bytes",String(await maxBytes(sql))))));
+      if(fileSize<=0||fileSize>cap)return err("too_large");
+      if(useDiskStorage){
+        const buffer=Buffer.from(encoded,"base64"),detected=detectFileType(buffer);
+        if(!detected||detected.category!==STORAGE_KIND[kind]||detected.mime!==fileMime)return err("bad_type");
+        storedExtension=extensionOf(fileName);
+        if(!storedExtension||storedExtension!==detected.extension)return err("bad_extension");
+        const policies=await sql<{enabled:unknown;max_bytes:number;category:string}>`select enabled,max_bytes,category from file_type_policies where extension=${storedExtension}`;
+        const policy=policies[0];
+        if(!policy||!bool(policy.enabled)||policy.category!==detected.category||fileSize>num(policy.max_bytes))return err("type_disabled");
+        if((await setting(sql,"file_upload_quota_enabled","true"))==="true"&&!(await enforceStorageQuota(sql,context.userId,fileSize)))return err("quota_exceeded");
+        storedCategory=detected.category;
+        try{storedObject=await storeFile({buffer,category:detected.category,maxBytes:Math.min(cap,num(policy.max_bytes))});}catch{return err("storage_unavailable");}
+        fileMime=detected.mime;fileData=null;
+      }else{const legacyCap=await maxBytes(sql);if(fileSize>legacyCap)return err("too_large");fileData=encoded;}
     }
     let replyTo: string | null = null;
     if (data.replyTo) {
@@ -1036,14 +1063,11 @@ export const sendMessage = createServerFn({ method: "POST" })
       if (found.length) replyTo = rid;
     }
     const id = crypto.randomUUID();
-    await sql`
-      insert into messages (
-        id, chat_id, sender_id, kind, body, file_name, file_mime, file_data, file_size, reply_to
-      ) values (
-        ${id}, ${chatId}, ${context.userId}, ${kind}, ${body || null},
-        ${fileName}, ${fileMime}, ${fileData}, ${fileSize}, ${replyTo}
-      )
-    `;
+    try {
+      if(storedObject&&storedCategory)await sql`insert into stored_files(id,owner_id,chat_id,storage_key,category,original_name,extension,detected_mime,size_bytes,sha256,status) values(${storedObject.id},${context.userId},${chatId},${storedObject.key},${storedCategory},${fileName},${storedExtension},${fileMime},${fileSize},${storedObject.sha256},'pending')`;
+      await sql`insert into messages(id,chat_id,sender_id,kind,body,file_name,file_mime,file_data,file_size,reply_to,stored_file_id) values(${id},${chatId},${context.userId},${kind},${body||null},${fileName},${fileMime},${fileData},${fileSize},${replyTo},${storedObject?.id??null})`;
+      if(storedObject){await sql`update stored_files set message_id=${id},status='active' where id=${storedObject.id}`;await sql`insert into file_upload_usage(user_id,file_id,size_bytes,state,committed_at) values(${context.userId},${storedObject.id},${fileSize},'committed',now())`;}
+    }catch(error){if(storedObject&&storedCategory){try{await sql`delete from stored_files where id=${storedObject.id}`;}catch{}try{await deleteStoredFile(storedObject.id,storedCategory);}catch{}}throw error;}
     await sql`
       insert into message_receipts (message_id, recipient_id)
       select ${id}, user_id from chat_members
@@ -1111,20 +1135,11 @@ export const getFile = createServerFn({ method: "GET" })
   .handler(async ({ context, data }) => {
     const sql = await getSql();
     await gate(sql, context.userId);
-    const rows = await sql<{
-      chat_id: string;
-      file_data: string | null;
-      file_mime: string | null;
-      file_name: string | null;
-      deleted_at: unknown;
-    }>`
-      select chat_id, file_data, file_mime, file_name, deleted_at from messages where id = ${data.id}
-    `;
-    const row = rows[0];
-    if (!row || row.deleted_at || !row.file_data) return { data: null, mime: null, name: null };
-    const mem = await memberRole(sql, row.chat_id, context.userId);
-    if (!mem) return { data: null, mime: null, name: null };
-    return { data: row.file_data, mime: row.file_mime, name: row.file_name };
+    const rows=await sql<{chat_id:string;file_data:string|null;file_mime:string|null;file_name:string|null;deleted_at:unknown;stored_file_id:string|null;category:StorageCategory|null;status:string|null}>`select m.chat_id,m.file_data,m.file_mime,m.file_name,m.deleted_at,m.stored_file_id,f.category,f.status from messages m left join stored_files f on f.id=m.stored_file_id where m.id=${data.id}`;
+    const row=rows[0];if(!row||row.deleted_at)return {data:null,mime:null,name:null};
+    const mem=await memberRole(sql,row.chat_id,context.userId);if(!mem)return {data:null,mime:null,name:null};
+    if(row.stored_file_id&&row.category&&row.status==="active"){const path=await getStoredFilePath(row.stored_file_id,row.category);if(!path)return {data:null,mime:null,name:null};const bytes=await readFile(path);return {data:bytes.toString("base64"),mime:row.file_mime,name:row.file_name};}
+    if(!row.file_data)return {data:null,mime:null,name:null};return {data:row.file_data,mime:row.file_mime,name:row.file_name};
   });
 
 export const openDirect = createServerFn({ method: "POST" })
