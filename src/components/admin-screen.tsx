@@ -421,8 +421,8 @@ function SettingsForm({
   initial,
   onSave,
 }: {
-  initial: { allowSignups: boolean; allowEmailSignup: boolean; allowPhoneSignup: boolean; maxUploadBytes: number; rateLimitLoginMax: number; rateLimitSignupMax: number; rateLimitOtpMax: number; rateLimitWindowSeconds: number; requireEmailVerification: boolean; requirePhoneVerification: boolean; maintenance: string };
-  onSave: (v: { allowSignups: boolean; allowEmailSignup: boolean; allowPhoneSignup: boolean; maxUploadBytes: number; rateLimitLoginMax: number; rateLimitSignupMax: number; rateLimitOtpMax: number; rateLimitWindowSeconds: number; requireEmailVerification: boolean; requirePhoneVerification: boolean; maintenance: string }) => Promise<void>;
+  initial: { allowSignups: boolean; allowEmailSignup: boolean; allowPhoneSignup: boolean; maxUploadBytes: number; rateLimitLoginMax: number; rateLimitSignupMax: number; rateLimitOtpMax: number; rateLimitWindowSeconds: number; requireEmailVerification: boolean; requirePhoneVerification: boolean; maintenance: string; fileStorageEnabled: boolean; fileUploadDefaultMaxBytes: number; fileUploadDailyQuotaBytes: number; fileUploadWeeklyQuotaBytes: number; fileUploadMonthlyQuotaBytes: number; fileUploadQuotaEnabled: boolean };
+  onSave: (v: { allowSignups: boolean; allowEmailSignup: boolean; allowPhoneSignup: boolean; maxUploadBytes: number; rateLimitLoginMax: number; rateLimitSignupMax: number; rateLimitOtpMax: number; rateLimitWindowSeconds: number; requireEmailVerification: boolean; requirePhoneVerification: boolean; maintenance: string; fileUploadDefaultMaxBytes: number; fileUploadDailyQuotaBytes: number; fileUploadWeeklyQuotaBytes: number; fileUploadMonthlyQuotaBytes: number; fileUploadQuotaEnabled: boolean }) => Promise<void>;
 }) {
   const { t, locale } = usePrefs();
   const [allowSignups, setAllow] = useState(initial.allowSignups);
@@ -436,12 +436,17 @@ function SettingsForm({
   const [requireEmailVerification, setRequireEmail] = useState(initial.requireEmailVerification);
   const [requirePhoneVerification, setRequirePhone] = useState(initial.requirePhoneVerification);
   const [maintenance, setNote] = useState(initial.maintenance);
+  const [fileUploadDefaultMaxBytes, setFileMax] = useState(String(initial.fileUploadDefaultMaxBytes));
+  const [fileUploadDailyQuotaBytes, setDailyQuota] = useState(String(initial.fileUploadDailyQuotaBytes));
+  const [fileUploadWeeklyQuotaBytes, setWeeklyQuota] = useState(String(initial.fileUploadWeeklyQuotaBytes));
+  const [fileUploadMonthlyQuotaBytes, setMonthlyQuota] = useState(String(initial.fileUploadMonthlyQuotaBytes));
+  const [fileUploadQuotaEnabled, setQuotaEnabled] = useState(initial.fileUploadQuotaEnabled);
   return (
     <form
       className="max-w-lg space-y-3 rounded-xl bg-panel p-4"
       onSubmit={(e) => {
         e.preventDefault();
-        void onSave({ allowSignups, allowEmailSignup, allowPhoneSignup, maxUploadBytes: Number(maxUploadBytes), rateLimitLoginMax: Number(rateLimitLoginMax), rateLimitSignupMax: Number(rateLimitSignupMax), rateLimitOtpMax: Number(rateLimitOtpMax), rateLimitWindowSeconds: Number(rateLimitWindowSeconds), requireEmailVerification, requirePhoneVerification, maintenance });
+        void onSave({ allowSignups, allowEmailSignup, allowPhoneSignup, maxUploadBytes: Number(maxUploadBytes), rateLimitLoginMax: Number(rateLimitLoginMax), rateLimitSignupMax: Number(rateLimitSignupMax), rateLimitOtpMax: Number(rateLimitOtpMax), rateLimitWindowSeconds: Number(rateLimitWindowSeconds), requireEmailVerification, requirePhoneVerification, maintenance, fileUploadDefaultMaxBytes: Number(fileUploadDefaultMaxBytes), fileUploadDailyQuotaBytes: Number(fileUploadDailyQuotaBytes), fileUploadWeeklyQuotaBytes: Number(fileUploadWeeklyQuotaBytes), fileUploadMonthlyQuotaBytes: Number(fileUploadMonthlyQuotaBytes), fileUploadQuotaEnabled });
       }}
     >
       <label className="flex items-center justify-between">
@@ -476,6 +481,18 @@ function SettingsForm({
         <span className="text-muted">{t("maxUpload")}</span>
         <input value={maxUploadBytes} onChange={(e) => setMax(e.target.value)} className="mt-1 h-11 w-full rounded-lg bg-header px-3" />
       </label>
+      <section className="space-y-3 rounded-xl border border-line p-3">
+        <div className="flex items-center justify-between gap-3"><strong>{locale === "fa" ? "ذخیره‌سازی فایل روی VPS" : "VPS file storage"}</strong><span className="rounded-full bg-header px-3 py-1 text-xs">{initial.fileStorageEnabled ? (locale === "fa" ? "فعال" : "Enabled") : (locale === "fa" ? "غیرفعال" : "Disabled")}</span></div>
+        <p className="text-xs leading-relaxed text-muted">{locale === "fa" ? "ذخیره‌سازی روی دیسک فعلاً از این صفحه فعال نمی‌شود؛ ابتدا باید مسیر امن خارج از public، دسترسی نوشتن و پشتیبان‌گیری روی سرور بررسی شود. این بخش فقط سقف‌ها را تنظیم می‌کند." : "Disk storage cannot be enabled here. First verify a private path outside the web root, write permissions and backups on the server. This section only configures limits."}</p>
+        <label className="flex items-center justify-between gap-3 text-sm"><span>{locale === "fa" ? "اعمال سهمیه کاربران" : "Enforce user quotas"}</span><input type="checkbox" checked={fileUploadQuotaEnabled} onChange={(e) => setQuotaEnabled(e.target.checked)} className="size-5" /></label>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="block text-sm"><span className="text-muted">{locale === "fa" ? "حداکثر حجم هر فایل (بایت)" : "Max file size (bytes)"}</span><input type="number" min={100000} max={524288000} value={fileUploadDefaultMaxBytes} onChange={(e) => setFileMax(e.target.value)} className="mt-1 h-10 w-full rounded-lg bg-header px-3" /></label>
+          <label className="block text-sm"><span className="text-muted">{locale === "fa" ? "سهمیه روزانه (بایت)" : "Daily quota (bytes)"}</span><input type="number" min={0} value={fileUploadDailyQuotaBytes} onChange={(e) => setDailyQuota(e.target.value)} className="mt-1 h-10 w-full rounded-lg bg-header px-3" /></label>
+          <label className="block text-sm"><span className="text-muted">{locale === "fa" ? "سهمیه هفتگی (بایت)" : "Weekly quota (bytes)"}</span><input type="number" min={0} value={fileUploadWeeklyQuotaBytes} onChange={(e) => setWeeklyQuota(e.target.value)} className="mt-1 h-10 w-full rounded-lg bg-header px-3" /></label>
+          <label className="block text-sm"><span className="text-muted">{locale === "fa" ? "سهمیه ماهانه (بایت)" : "Monthly quota (bytes)"}</span><input type="number" min={0} value={fileUploadMonthlyQuotaBytes} onChange={(e) => setMonthlyQuota(e.target.value)} className="mt-1 h-10 w-full rounded-lg bg-header px-3" /></label>
+        </div>
+        <p className="text-xs text-muted">{locale === "fa" ? "مقدار صفر به معنی بدون محدودیت است. واحد تمام فیلدها بایت است." : "Zero means unlimited. All values are in bytes."}</p>
+      </section>
       <label className="block text-sm">
         <span className="text-muted">{t("maintenance")}</span>
         <textarea value={maintenance} onChange={(e) => setNote(e.target.value)} className="mt-1 h-24 w-full rounded-lg bg-header p-3" />

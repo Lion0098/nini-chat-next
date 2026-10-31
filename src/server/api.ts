@@ -1042,7 +1042,7 @@ export const sendMessage = createServerFn({ method: "POST" })
       if(fileSize<=0||fileSize>cap)return err("too_large");
       if(useDiskStorage){
         const buffer=Buffer.from(encoded,"base64"),detected=detectFileType(buffer);
-        if(!detected||detected.category!==STORAGE_KIND[kind]||detected.mime!==fileMime)return err("bad_type");
+        if(!detected||(kind==="file"?!["documents","archives"].includes(detected.category):detected.category!==STORAGE_KIND[kind])||detected.mime!==fileMime)return err("bad_type");
         storedExtension=extensionOf(fileName);
         if(!storedExtension||storedExtension!==detected.extension)return err("bad_extension");
         const policies=await sql<{enabled:unknown;max_bytes:number;category:string}>`select enabled,max_bytes,category from file_type_policies where extension=${storedExtension}`;
@@ -2387,6 +2387,12 @@ export const adminGetSettings = createServerFn({ method: "GET" })
       requireEmailVerification: (await setting(sql, "require_email_verification", "false")) === "true",
       requirePhoneVerification: (await setting(sql, "require_phone_verification", "false")) === "true",
       maintenance: await setting(sql, "maintenance_message", ""),
+      fileStorageEnabled: (await setting(sql, "file_storage_enabled", "false")) === "true",
+      fileUploadDefaultMaxBytes: Number(await setting(sql, "file_upload_default_max_bytes", "20971520")),
+      fileUploadDailyQuotaBytes: Number(await setting(sql, "file_upload_daily_quota_bytes", "536870912")),
+      fileUploadWeeklyQuotaBytes: Number(await setting(sql, "file_upload_weekly_quota_bytes", "2147483648")),
+      fileUploadMonthlyQuotaBytes: Number(await setting(sql, "file_upload_monthly_quota_bytes", "5368709120")),
+      fileUploadQuotaEnabled: (await setting(sql, "file_upload_quota_enabled", "true")) === "true",
     };
   });
 
@@ -2434,6 +2440,12 @@ export const adminSaveSettings = createServerFn({ method: "POST" })
       ["require_email_verification", requireEmailVerification ? "true" : "false"],
       ["require_phone_verification", requirePhoneVerification ? "true" : "false"],
     ];
+    const fileLimit = bounded(data.fileUploadDefaultMaxBytes, Number(await setting(sql, "file_upload_default_max_bytes", "20971520")), 100_000, 500 * 1024 * 1024);
+    const dailyQuota = bounded(data.fileUploadDailyQuotaBytes, Number(await setting(sql, "file_upload_daily_quota_bytes", "536870912")), 0, 100 * 1024 * 1024 * 1024);
+    const weeklyQuota = bounded(data.fileUploadWeeklyQuotaBytes, Number(await setting(sql, "file_upload_weekly_quota_bytes", "2147483648")), 0, 500 * 1024 * 1024 * 1024);
+    const monthlyQuota = bounded(data.fileUploadMonthlyQuotaBytes, Number(await setting(sql, "file_upload_monthly_quota_bytes", "5368709120")), 0, 2 * 1024 * 1024 * 1024 * 1024);
+    const quotaEnabled = data.fileUploadQuotaEnabled === undefined ? (await setting(sql, "file_upload_quota_enabled", "true")) === "true" : Boolean(data.fileUploadQuotaEnabled);
+    pairs.push(["file_upload_default_max_bytes", String(fileLimit)], ["file_upload_daily_quota_bytes", String(dailyQuota)], ["file_upload_weekly_quota_bytes", String(weeklyQuota)], ["file_upload_monthly_quota_bytes", String(monthlyQuota)], ["file_upload_quota_enabled", quotaEnabled ? "true" : "false"]);
     const previous = {
       allowSignups: (await setting(sql, "allow_signups", "true")) !== "false",
       allowEmailSignup: (await setting(sql, "allow_email_signup", "true")) !== "false",
@@ -2461,6 +2473,11 @@ export const adminSaveSettings = createServerFn({ method: "POST" })
         requireEmailVerification,
         requirePhoneVerification,
         maintenance,
+        fileUploadDefaultMaxBytes: fileLimit,
+        fileUploadDailyQuotaBytes: dailyQuota,
+        fileUploadWeeklyQuotaBytes: weeklyQuota,
+        fileUploadMonthlyQuotaBytes: monthlyQuota,
+        fileUploadQuotaEnabled: quotaEnabled,
       },
     });
     return ok(true);
