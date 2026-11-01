@@ -36,6 +36,7 @@ test("rejects a symlink substituted for a stored object",async()=>{
  await symlink(external,stored.absolutePath);
  assert.equal(await getStoredFilePath(stored.id,"images"),null);
  const { openStoredFile }=await import("./file-storage.ts");
- assert.throws(()=>openStoredFile(stored.absolutePath),/escaped root/);
+ const { finished }=await import("node:stream/promises");
+ await assert.rejects(finished(openStoredFile(stored.absolutePath)));
  await remove(stored.absolutePath);
 });
