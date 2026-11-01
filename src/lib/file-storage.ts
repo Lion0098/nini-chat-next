@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, rename, rm, stat } from "node:fs/promises";
-import { createReadStream } from "node:fs";
+import { lstat, mkdir, open, rename, rm, stat } from "node:fs/promises";
+import { constants, createReadStream } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 export type StorageCategory = "images" | "videos" | "audio" | "documents" | "archives" | "executables" | "other";
 export type StoredObject = { id: string; key: string; absolutePath: string; sizeBytes: number; sha256: string };
@@ -44,6 +44,6 @@ export async function storeFile(input:{buffer:Buffer;category:StorageCategory;ma
  try { await rename(temporary,destination); const info=await stat(destination); return {id,key:input.category+"/"+id.slice(0,2)+"/"+id,absolutePath:destination,sizeBytes:info.size,sha256:createHash("sha256").update(input.buffer).digest("hex")}; }
  catch(error){await rm(temporary,{force:true});throw error;}
 }
-export async function getStoredFilePath(id:string,category:StorageCategory):Promise<string|null>{const path=objectPath(id,category);try{const info=await stat(path);return info.isFile()?path:null;}catch{return null;}}
-export function openStoredFile(path:string){const root=storageRoot(),rel=relative(root,resolve(path));if(!rel||rel.startsWith("..")||isAbsolute(rel))throw new Error("Storage path escaped root");return createReadStream(resolve(path));}
+export async function getStoredFilePath(id:string,category:StorageCategory):Promise<string|null>{const path=objectPath(id,category);try{const info=await lstat(path);return info.isFile()&&!info.isSymbolicLink()?path:null;}catch{return null;}}
+export function openStoredFile(path:string){const root=storageRoot(),rel=relative(root,resolve(path));if(!rel||rel.startsWith("..")||isAbsolute(rel))throw new Error("Storage path escaped root");return createReadStream(resolve(path),{flags:constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)});}
 export async function deleteStoredFile(id:string,category:StorageCategory):Promise<void>{await rm(objectPath(id,category),{force:true});}

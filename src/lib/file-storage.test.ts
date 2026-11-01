@@ -26,3 +26,16 @@ test("rejects empty and oversized uploads",async()=>{
  await assert.rejects(()=>storeFile({buffer:Buffer.alloc(0),category:"images",maxBytes:10}));
  await assert.rejects(()=>storeFile({buffer:Buffer.alloc(11),category:"images",maxBytes:10}));
 });
+
+test("rejects a symlink substituted for a stored object",async()=>{
+ const bytes=Buffer.from([0xff,0xd8,0xff,9]),stored=await storeFile({buffer:bytes,category:"images",maxBytes:100});
+ const { symlink, writeFile, rm:remove }=await import("node:fs/promises");
+ const external=join(root,"outside.bin");
+ await writeFile(external,Buffer.from("outside"));
+ await remove(stored.absolutePath);
+ await symlink(external,stored.absolutePath);
+ assert.equal(await getStoredFilePath(stored.id,"images"),null);
+ const { openStoredFile }=await import("./file-storage.ts");
+ assert.throws(()=>openStoredFile(stored.absolutePath),/escaped root/);
+ await remove(stored.absolutePath);
+});
