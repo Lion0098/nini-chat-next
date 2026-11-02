@@ -19,7 +19,7 @@ test("pending migrations are returned in name order",()=>{assert.deepEqual(pendi
 test("non-.sql entries are dropped (readdir also yields the auth/ directory)",()=>{assert.equal(isMigrationFile("auth"),false);assert.deepEqual(pendingMigrations(["auth","README.md"],[]),[]);});
 test("the canonical migration directory contains ordered SQL migrations",()=>{
  const names=pendingMigrations(readdirSync(join(projectRoot(),"migrations")),[]).map(({name})=>name);
- assert.deepEqual(names,["0001_auth.sql","0002_messenger.sql","0003_data_integrity.sql","0004_auth_lifecycle.sql","0005_message_receipts.sql","0006_admin_security.sql","0007_admin_invitations.sql","0008_phase6_groups_channels.sql","0009_phase7_platform_ops.sql","0010_vps_file_storage.sql","0011_file_quota_and_backup.sql"]);
+ assert.deepEqual(names,["0001_auth.sql","0002_messenger.sql","0003_data_integrity.sql","0004_auth_lifecycle.sql","0005_message_receipts.sql","0006_admin_security.sql","0007_admin_invitations.sql","0008_phase6_groups_channels.sql","0009_phase7_platform_ops.sql","0010_vps_file_storage.sql","0011_file_quota_and_backup.sql","0012_admin_analytics_and_bulk_messages.sql"]);
  assert.ok(readdirSync(join(projectRoot(),"migrations/auth")).includes("0001_auth.sql"));
 });
 test("this workspace's auth schema copy is byte-identical to its source",()=>{const pair=authSchemaCopy(projectRoot());if(pair===null)return;assert.equal(pair.copy,pair.source,"migrations/0001_auth.sql must stay a verbatim copy of migrations/auth/0001_auth.sql");});

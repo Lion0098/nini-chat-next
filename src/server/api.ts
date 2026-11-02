@@ -3036,3 +3036,127 @@ export const adminGetOperationalStatus = createServerFn({ method: "GET" })
     }
     return { checkedAt: new Date().toISOString(), checks };
   });
+
+
+// Phase 10: privacy-preserving admin analytics and bounded direct-message delivery.
+export const adminGetAnalyticsOverview = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const sql = await getSql();
+    const { role } = await requireAuditReader(sql, context.userId);
+    const rows = await sql<any>`
+      select
+        (select count(*)::int from "user") as users,
+        (select count(*)::int from messages where deleted_at is null) as messages,
+        (select count(*)::int from statuses) as stories,
+        (select count(*)::int from profiles where last_seen_at >= now() - interval '30 days') as active_30d,
+        (select count(*)::int from profiles where last_seen_at is null or last_seen_at < now() - interval '30 days') as inactive_30d,
+        (select coalesce(round(count(*)::numeric / nullif((select count(*) from "user"),0),2),0) from messages where deleted_at is null) as messages_per_user
+    `;
+    const daily = await sql<any>`
+      select d.day::date as day,
+        (select count(*)::int from messages m where m.created_at >= d.day and m.created_at < d.day + interval '1 day' and m.deleted_at is null) as messages,
+        (select count(*)::int from statuses s where s.created_at >= d.day and s.created_at < d.day + interval '1 day') as stories,
+        (select count(*)::int from profiles p where p.created_at >= d.day and p.created_at < d.day + interval '1 day') as signups
+      from generate_series(current_date - interval '29 days', current_date, interval '1 day') d(day)
+      order by d.day
+    `;
+    const peak = await sql<any>`
+      select extract(hour from created_at)::int as hour, count(*)::int as total
+      from messages where created_at >= now() - interval '30 days' and deleted_at is null
+      group by 1 order by total desc limit 1
+    `;
+    return { ...rows[0], viewerRole: role, daily: daily.map((r:any)=>({day:iso(r.day),messages:num(r.messages),stories:num(r.stories),signups:num(r.signups)})), peakHour: peak[0]?.hour ?? null };
+  });
+
+export const adminGetUserAnalytics = createServerFn({ method: "GET" })
+  .validator((input: unknown) => { const userId=clean(rec(input ?? {}).userId,80); if(!userId) throw new Error("bad_input"); return {userId}; })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql=await getSql(); await requireAuditReader(sql,context.userId);
+    const rows=await sql<any>`
+      select u.id, coalesce(p.display_name,u.name) as display_name,
+        coalesce(p.created_at,u."createdAt") as joined_at,p.last_seen_at,
+        (select count(*)::int from messages m where m.sender_id=u.id and m.deleted_at is null) as sent,
+        (select count(*)::int from messages m join chat_members cm on cm.chat_id=m.chat_id where cm.user_id=u.id and m.sender_id<>u.id and m.deleted_at is null) as received,
+        (select count(*)::int from statuses s where s.user_id=u.id) as stories
+      from "user" u left join profiles p on p.user_id=u.id where u.id=${data.userId}
+    `;
+    if(!rows.length) return err("not_found");
+    const peers=await sql<any>`
+      select p.user_id,coalesce(p.display_name,u.name,p.user_id) as name,count(*)::int as interactions
+      from chat_members mine join chat_members other on other.chat_id=mine.chat_id and other.user_id<>mine.user_id
+      join chats c on c.id=mine.chat_id and c.kind='direct'
+      join profiles p on p.user_id=other.user_id left join "user" u on u.id=other.user_id
+      where mine.user_id=${data.userId}
+      group by p.user_id,p.display_name,u.name order by interactions desc limit 5
+    `;
+    const chats=await sql<any>`
+      select c.id,c.kind,c.title,c.updated_at,count(m.id)::int as message_count
+      from chat_members cm join chats c on c.id=cm.chat_id
+      left join messages m on m.chat_id=c.id and m.deleted_at is null
+      where cm.user_id=${data.userId} group by c.id order by c.updated_at desc limit 20
+    `;
+    const daily=await sql<any>`
+      select d.day::date as day,
+        (select count(*)::int from messages m where m.sender_id=${data.userId} and m.created_at>=d.day and m.created_at<d.day+interval '1 day' and m.deleted_at is null) as sent
+      from generate_series(current_date-interval '29 days',current_date,interval '1 day') d(day) order by d.day
+    `;
+    return ok({profile:{userId:rows[0].id,name:rows[0].display_name,joinedAt:iso(rows[0].joined_at),lastSeenAt:iso(rows[0].last_seen_at)},sent:num(rows[0].sent),received:num(rows[0].received),stories:num(rows[0].stories),topPeers:peers.map((p:any)=>({userId:p.user_id,name:p.name,interactions:num(p.interactions)})),chats:chats.map((c:any)=>({id:c.id,kind:c.kind,title:c.title,updatedAt:iso(c.updated_at),messages:num(c.message_count)})),daily:daily.map((d:any)=>({day:iso(d.day),sent:num(d.sent)}))});
+  });
+
+export const adminSendBulkDirectMessage = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o=rec(input), body=clean(o.body,4000), target=clean(o.target,20);
+    const userIds=Array.isArray(o.userIds)?[...new Set(o.userIds.map((v:unknown)=>clean(v,80)).filter(Boolean))].slice(0,100):[];
+    if(!body || body.length>4000 || !["all","active","inactive","selected"].includes(target) || (target==="selected"&&!userIds.length)) throw new Error("bad_input");
+    return {body,target,userIds};
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql=await getSql(); await requireAdmin(sql,context.userId);
+    const users= data.target==="selected"
+      ? await sql<any>`select u.id from "user" u left join profiles p on p.user_id=u.id where u.id=any(${data.userIds}::text[]) and u.id<>${context.userId} and coalesce(p.suspended,false)=false order by u.id limit 100`
+      : data.target==="all"
+      ? await sql<any>`select u.id from "user" u left join profiles p on p.user_id=u.id where u.id<>${context.userId} and coalesce(p.suspended,false)=false order by u.id limit 100`
+      : data.target==="active"
+      ? await sql<any>`select u.id from "user" u join profiles p on p.user_id=u.id where u.id<>${context.userId} and coalesce(p.suspended,false)=false and p.last_seen_at>=now()-interval '30 days' order by u.id limit 100`
+      : await sql<any>`select u.id from "user" u left join profiles p on p.user_id=u.id where u.id<>${context.userId} and coalesce(p.suspended,false)=false and (p.last_seen_at is null or p.last_seen_at<now()-interval '30 days') order by u.id limit 100`;
+    const job=crypto.randomUUID();
+    await sql`insert into admin_bulk_message_jobs(id,admin_id,body,target_filter,target_count,state) values(${job},${context.userId},${data.body},${data.target},${users.length},'processing')`;
+    let sent=0,failed=0;
+    for(const user of users){
+      const recipient=String(user.id);
+      try{
+        const a=context.userId<recipient?context.userId:recipient,b=context.userId<recipient?recipient:context.userId;
+        const chatId=crypto.randomUUID();
+        const chats=await sql<any>`
+          insert into chats(id,kind,created_by,direct_user_a,direct_user_b)
+          values(${chatId},'direct',${context.userId},${a},${b})
+          on conflict(direct_user_a,direct_user_b) where kind='direct' and direct_user_a is not null and direct_user_b is not null
+          do update set updated_at=now() returning id
+        `;
+        const cid=String(chats[0].id);
+        await sql`insert into chat_members(chat_id,user_id,role) values(${cid},${context.userId},'member'),(${cid},${recipient},'member') on conflict(chat_id,user_id) do nothing`;
+        const messageId=crypto.randomUUID();
+        await sql`insert into messages(id,chat_id,sender_id,kind,body) values(${messageId},${cid},${context.userId},'text',${data.body})`;
+        await sql`update chats set updated_at=now() where id=${cid}`;
+        await sql`insert into admin_bulk_message_recipients(job_id,recipient_id,chat_id,message_id,status,sent_at) values(${job},${recipient},${cid},${messageId},'sent',now())`;
+        sent++;
+      }catch{
+        failed++;
+        await sql`insert into admin_bulk_message_recipients(job_id,recipient_id,status,error_code) values(${job},${recipient},'failed','delivery_error') on conflict(job_id,recipient_id) do update set status='failed',error_code='delivery_error'`;
+      }
+    }
+    await sql`update admin_bulk_message_jobs set sent_count=${sent},failed_count=${failed},state='completed',completed_at=now() where id=${job}`;
+    await auditAdminEvent(sql,context.userId,"admin.bulk_direct_message",null,{jobId:job,target:data.target,targetCount:users.length,sent,failed});
+    return ok({jobId:job,targetCount:users.length,sent,failed,limit:100});
+  });
+
+export const adminListBulkMessageJobs = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({context})=>{
+    const sql=await getSql(); await requireAuditReader(sql,context.userId);
+    const rows=await sql<any>`select id,target_filter,target_count,sent_count,failed_count,state,created_at,completed_at from admin_bulk_message_jobs order by created_at desc limit 30`;
+    return rows.map((r:any)=>({id:r.id,target:r.target_filter,targetCount:num(r.target_count),sent:num(r.sent_count),failed:num(r.failed_count),state:r.state,createdAt:iso(r.created_at),completedAt:iso(r.completed_at)}));
+  });
