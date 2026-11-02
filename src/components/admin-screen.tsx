@@ -6,6 +6,7 @@ import { ArrowRight } from "lucide-react";
 import { usePrefs } from "@/lib/prefs";
 import { formatChatTime } from "@/lib/format";
 import { AdminReportNotes } from "@/components/admin-report-notes";
+import { AdminInsights } from "@/components/admin-insights";
 import {
   adminCreateUser,
   adminCreateAnnouncement,
@@ -31,7 +32,7 @@ import {
   getMe,
 } from "@/server/api";
 
-type Tab = "dashboard" | "users" | "groups" | "reports" | "appeals" | "audit" | "system" | "ops";
+type Tab = "dashboard" | "users" | "groups" | "reports" | "appeals" | "audit" | "system" | "ops" | "insights";
 
 export function AdminScreen() {
   const { t, err, locale } = usePrefs();
@@ -101,12 +102,13 @@ export function AdminScreen() {
     );
   }
 
-  const tabs: Tab[] = ["dashboard", "users", "groups", "reports", "appeals", "audit", "system", "ops"];
+  const tabs: Tab[] = ["dashboard", "users", "groups", "reports", "appeals", "audit", "insights", "system", "ops"];
   const label: Record<Tab, string> = {
     dashboard: locale === "fa" ? "داشبورد" : "Dashboard",
     users: t("users"), groups: t("groups"), reports: t("reports"),
     audit: locale === "fa" ? "گزارش رویدادها" : "Audit log", system: t("system"),
     appeals: locale === "fa" ? "اعتراض‌های کاربران" : "Appeals",
+    insights: locale === "fa" ? "تحلیل و پیام همگانی" : "Analytics & bulk messages",
     ops: locale === "fa" ? "عملیات و اطلاعیه‌ها" : "Operations",
   };
 
@@ -147,6 +149,7 @@ export function AdminScreen() {
             <p className="text-xs text-muted sm:col-span-2 lg:col-span-3">{locale === "fa" ? `نقش دسترسی شما: ${dashboard.data?.viewerRole ?? "—"}` : `Your access role: ${dashboard.data?.viewerRole ?? "—"}`}</p>
           </section>
         ) : null}
+        {tab === "insights" ? <AdminInsights locale={locale} /> : null}
         {tab === "audit" ? (
           <section className="space-y-2">
             <p className="text-xs text-muted">{locale === "fa" ? "این رویدادها فقط خواندنی هستند؛ اطلاعات محرمانه در جزئیات ثبت نمی‌شوند." : "Read-only events. Secret values are not included in event metadata."}</p>
