@@ -45,5 +45,5 @@ export async function storeFile(input:{buffer:Buffer;category:StorageCategory;ma
  catch(error){await rm(temporary,{force:true});throw error;}
 }
 export async function getStoredFilePath(id:string,category:StorageCategory):Promise<string|null>{const path=objectPath(id,category);try{const info=await lstat(path);return info.isFile()&&!info.isSymbolicLink()?path:null;}catch{return null;}}
-export function openStoredFile(path:string){const root=storageRoot(),rel=relative(root,resolve(path));if(!rel||rel.startsWith("..")||isAbsolute(rel))throw new Error("Storage path escaped root");return createReadStream(resolve(path),{flags:constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)});}
+export function openStoredFile(path:string){const root=storageRoot(),rel=relative(root,resolve(path));if(!rel||rel.startsWith("..")||isAbsolute(rel))throw new Error("Storage path escaped root");return createReadStream(resolve(path),{flags:(constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)) as unknown as string});}
 export async function deleteStoredFile(id:string,category:StorageCategory):Promise<void>{await rm(objectPath(id,category),{force:true});}
