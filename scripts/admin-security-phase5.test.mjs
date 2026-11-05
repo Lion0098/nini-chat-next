@@ -33,7 +33,10 @@ test("dashboard, audit reader and role assignment APIs require backend authoriza
 });
 
 test("sensitive account changes emit audit events without logging password values", () => {
-  for (const action of ["user.updated", "user.invitation_sent", "user.invitation_accepted", "user.deleted", "report.status_changed", "admin.role_changed"]) assert.ok(api.includes(action), `missing ${action}`);
+  for (const action of ["user.updated", "user.invitation_sent", "user.invitation_accepted", "report.status_changed", "admin.role_changed"]) assert.ok(api.includes(action), `missing ${action}`);
+  const deleteStart = api.indexOf("export const adminDeleteUser");
+  const deleteEnd = api.indexOf("export const adminListGroups", deleteStart);
+  assert.ok(api.slice(deleteStart, deleteEnd).includes("hard_delete_disabled"), "irreversible deletion must remain disabled until retention-aware deletion exists");
   assert.ok(!api.includes("auditAdminEvent(sql, context.userId, \"user.created\", userId, { password"));
 });
 
