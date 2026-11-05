@@ -154,9 +154,8 @@ export const SESSION_TOKEN_COOKIE = "__Host-grok-auth.session_token";
 
 // Built separately so the `betterAuth({...})` call stays easy to edit without
 // breaking brackets (models often trip on the conditional plugin spread).
-const grokOAuthPlugin = authConfigured
-  ? genericOAuth({
-      config: GROK_PROVIDERS.map(({ providerId, idp }) => ({
+const grokOAuthPlugin = genericOAuth({
+      config: authConfigured ? GROK_PROVIDERS.map(({ providerId, idp }) => ({
         providerId,
         clientId: grokClientId as string,
         clientSecret: grokClientSecret as string,
@@ -172,9 +171,8 @@ const grokOAuthPlugin = authConfigured
         // `prompt=select_account`, the user always gets the account chooser
         // and can pick (or switch) which account to sign in with.
         authorizationUrlParams: { idp, prompt: "login" },
-      })),
-    })
-  : null;
+      })) : [],
+    });
 
 export const auth = betterAuth({
   baseURL,
@@ -245,7 +243,7 @@ export const auth = betterAuth({
         minPasswordLength: 8,
         revokeSessionsOnPasswordReset: true,
         resetPasswordTokenExpiresIn: 30 * 60,
-        sendResetPassword: ({ user, url }) => {
+        sendResetPassword: async ({ user, url }) => {
           // Do not await delivery: the public reset endpoint must not leak account existence by timing.
           void sendPasswordResetEmail(user.email, url, user.name).catch(() => {
             console.error("[email] password-reset delivery failed; inspect Resend configuration.");
@@ -314,7 +312,7 @@ export const auth = betterAuth({
 
     // One genericOAuth provider per upstream (when auth is on), all federating
     // to the broker with the SAME client and differing only by the `idp` hint.
-    ...(grokOAuthPlugin ? [grokOAuthPlugin] : []),
+    grokOAuthPlugin,
 
     // Accept `Authorization: Bearer <session-token>` as an alternative to the
     // cookie. Needed for the LIVE PREVIEW: the app runs in an embedded iframe
