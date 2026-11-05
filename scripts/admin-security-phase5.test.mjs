@@ -26,10 +26,10 @@ test("audit log is append-only and does not store credentials by schema", () => 
 });
 
 test("dashboard, audit reader and role assignment APIs require backend authorization", () => {
-  assert.match(api, /export const adminGetDashboard[\s\S]*?requireAuditReader\(sql, context\.userId\)/);
+  assert.match(api, /export const adminGetDashboard[\s\S]*?requireAdminPermission\(sql, context\.userId, "dashboard\.read"\)/);
   assert.match(api, /export const adminListAuditEvents[\s\S]*?requireAuditReader\(sql, context\.userId\)/);
-  assert.match(api, /export const adminSetAdminRole[\s\S]*?requireAdmin\(sql, context\.userId\)[\s\S]*?actorRole !== "owner"/);
-  assert.match(api, /assigned !== "owner" && assigned !== "administrator"/);
+  assert.match(api, /export const adminSetAdminRole[\s\S]*?requireAdminPermission\(sql, context\.userId, "admins\.roles\.manage"\)[\s\S]*?actorRole !== "owner"/);
+  assert.match(api, /async function requireAdmin[\s\S]*?admin\.full_access/);
 });
 
 test("sensitive account changes emit audit events without logging password values", () => {
@@ -89,12 +89,12 @@ test("admin-created accounts use hashed, expiring, single-use email invitations"
   assert.doesNotMatch(adminUi, /draft\.password/);
 });
 
-test("moderator and support endpoints enforce their own least-privilege roles", () => {
-  assert.match(api, /export const moderatorListReports[\s\S]*?requireAssignedRole\(sql, context\.userId, \["owner", "administrator", "moderator"\]\)/);
-  assert.match(api, /export const moderatorSetReportStatus[\s\S]*?requireAssignedRole\(sql, context\.userId, \["owner", "administrator", "moderator"\]\)/);
-  assert.match(api, /export const supportFindUser[\s\S]*?requireAssignedRole\(sql, context\.userId, \["owner", "administrator", "support"\]\)/);
-  assert.match(api, /export const supportRevokeUserSessions[\s\S]*?requireAssignedRole\(sql, context\.userId, \["owner", "administrator", "support"\]\)/);
-  assert.match(api, /if \(row\.role !== "admin" \|\| !assigned \|\| !roles\.includes\(assigned\)\) throw new Error\("forbidden"\)/);
+test("moderator and support endpoints enforce named least-privilege permissions", () => {
+  assert.match(api, /export const moderatorListReports[\s\S]*?requireAdminPermission\(sql, context\.userId, "moderation\.read"\)/);
+  assert.match(api, /export const moderatorSetReportStatus[\s\S]*?requireAdminPermission\(sql, context\.userId, "moderation\.manage"\)/);
+  assert.match(api, /export const supportFindUser[\s\S]*?requireAdminPermission\(sql, context\.userId, "users\.support\.read"\)/);
+  assert.match(api, /export const supportRevokeUserSessions[\s\S]*?requireAdminPermission\(sql, context\.userId, "users\.sessions\.revoke"\)/);
+  assert.match(api, /!hasAdminPermission\(assigned, permission\)/);
 });
 
 
