@@ -190,7 +190,7 @@ export function AdminScreen() {
                         void qc.invalidateQueries({ queryKey: ["admin-dashboard"] });
                       });
                     }}>{userDetails.data.profile.isActive ? (locale === "fa" ? "غیرفعال‌سازی حساب" : "Deactivate account") : (locale === "fa" ? "فعال‌سازی مجدد" : "Reactivate account")}</button> : null}
-                    <button type="button" disabled={!userDetails.data.profile.emailVerified} title={!userDetails.data.profile.emailVerified ? (locale === "fa" ? "ابتدا باید ایمیل کاربر تأیید شود." : "The user's email must be verified first.") : undefined} className="rounded-full bg-header px-3 py-2 text-sm disabled:opacity-40" onClick={() => {
+                    <button type="button" disabled={!userDetails.data?.profile.emailVerified} title={!userDetails.data?.profile.emailVerified ? (locale === "fa" ? "ابتدا باید ایمیل کاربر تأیید شود." : "The user's email must be verified first.") : undefined} className="rounded-full bg-header px-3 py-2 text-sm disabled:opacity-40" onClick={() => {
                       if (!window.confirm(locale === "fa" ? "لینک بازیابی رمز به ایمیل تأییدشده کاربر ارسال شود؟" : "Send a password-reset link to the user's verified email?")) return;
                       void adminRequestUserPasswordReset({ data: { userId: selectedUserId! } }).then((res) => {
                         if (!res.ok) toast.error(err(res.error));
