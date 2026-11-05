@@ -2135,23 +2135,36 @@ export const redeemAdminInvitation = createServerFn({ method: "POST" })
     const existing = await sql<{ id: string }>`select id from "user" where lower(email) = ${invite.email} limit 1`;
     if (existing.length) return err("email_taken");
     const { auth } = await import("@/lib/auth/server");
+    let createdUserId: string | null = null;
+    let invitationClaimed = false;
     try {
-      const created = await auth.api.signUpEmail({ body: { email: invite.email, password: data.password, name: invite.display_name, username: invite.username } });
+      const created = await auth.api.signUpEmail({ body: { email: invite.email, password: data.password, name: invite.display_name } });
       const userId = created.user.id;
-      const claimed = await sql<{ token_hash: string }>`update admin_invitations set accepted_at = now(), accepted_user_id = ${userId}
-        where token_hash = ${tokenHash} and accepted_at is null and expires_at > now() returning token_hash`;
-      if (!claimed.length) {
-        await sql`delete from "session" where "userId" = ${userId}`;
-        await sql`delete from "account" where "userId" = ${userId}`;
-        await sql`delete from "user" where id = ${userId}`;
-        return err("invitation_invalid_or_expired");
-      }
+      createdUserId = userId;
+      await sql`update "user" set username = ${invite.username} where id = ${userId}`;
       await sql`insert into profiles (user_id, username, display_name, role, last_seen_at)
         values (${userId}, ${invite.username}, ${invite.display_name}, 'user', null)
         on conflict (user_id) do update set username = excluded.username, display_name = excluded.display_name`;
+      const claimed = await sql<{ token_hash: string }>`update admin_invitations set accepted_at = now(), accepted_user_id = ${userId}
+        where token_hash = ${tokenHash} and accepted_at is null and expires_at > now() returning token_hash`;
+      if (!claimed.length) {
+        await sql`delete from profiles where user_id = ${userId}`;
+        await sql`delete from "session" where "userId" = ${userId}`;
+        await sql`delete from "account" where "userId" = ${userId}`;
+        await sql`delete from "user" where id = ${userId}`;
+        createdUserId = null;
+        return err("invitation_invalid_or_expired");
+      }
+      invitationClaimed = true;
       await auditAdminEvent(sql, invite.invited_by, "user.invitation_accepted", userId, { email: invite.email });
       return ok({ userId, email: invite.email });
     } catch (e) {
+      if (createdUserId && !invitationClaimed) {
+        await sql`delete from profiles where user_id = ${createdUserId}`;
+        await sql`delete from "session" where "userId" = ${createdUserId}`;
+        await sql`delete from "account" where "userId" = ${createdUserId}`;
+        await sql`delete from "user" where id = ${createdUserId}`;
+      }
       const message = e instanceof Error ? e.message : String(e);
       if (/user_username_lower_unique|username.*unique/i.test(message)) return err("username_taken");
       if (/exist|unique|already/i.test(message)) return err("email_taken");
