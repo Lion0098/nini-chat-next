@@ -164,6 +164,7 @@ export type AdminUser = {
   phone: string | null;
   role: Role;
   suspended: boolean;
+  isActive: boolean;
   about: string;
   createdAt: string;
   lastSeenAt: string | null;

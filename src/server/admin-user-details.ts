@@ -37,7 +37,7 @@ export const adminGetUserDetails = createServerFn({ method: "GET" })
       select u.id, u.email, u.name, u.image, u."emailVerified" as email_verified,
         u."phoneNumber" as phone_number, u."phoneNumberVerified" as phone_number_verified,
         u."createdAt" as auth_created_at, u."updatedAt" as auth_updated_at,
-        p.username, p.display_name, p.phone, p.about, p.role, p.suspended,
+        p.username, p.display_name, p.phone, p.about, p.role, p.suspended, p.is_active,
         coalesce(p.created_at, u."createdAt") as created_at, p.last_seen_at
       from "user" u left join profiles p on p.user_id = u.id
       where u.id = ${data.userId} limit 1
@@ -78,7 +78,7 @@ export const adminGetUserDetails = createServerFn({ method: "GET" })
         phone: user.phone == null ? null : String(user.phone),
         phoneNumber: user.phone_number == null ? null : String(user.phone_number),
         about: String(user.about ?? ""), role: String(user.role ?? "user"),
-        suspended: Boolean(user.suspended),
+        suspended: Boolean(user.suspended), isActive: user.is_active !== false,
         emailVerified: Boolean(user.email_verified),
         phoneVerified: Boolean(user.phone_number_verified),
         createdAt: iso(user.created_at), updatedAt: iso(user.auth_updated_at),
@@ -99,4 +99,45 @@ export const adminGetUserDetails = createServerFn({ method: "GET" })
         action: String(row.action), actorName: String(row.actor_name), createdAt: iso(row.created_at),
       })),
     };
+  });
+
+
+export const adminSetUserActive = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const value = input as { userId?: unknown; isActive?: unknown; reason?: unknown } | null;
+    const userId = cleanUserId(value?.userId);
+    const isActive = value?.isActive;
+    const reason = typeof value?.reason === "string" ? value.reason.trim().slice(0, 500) : "";
+    if (!userId || typeof isActive !== "boolean" || reason.length < 3) throw new Error("bad_input");
+    return { userId, isActive, reason };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    const actor = await sql<{ profile_role: string | null; assigned_role: string | null }>`
+      select p.role as profile_role, a.role as assigned_role
+      from profiles p left join admin_role_assignments a on a.user_id = p.user_id
+      where p.user_id = ${context.userId} limit 1
+    `;
+    const role = actor[0]?.assigned_role;
+    if (actor[0]?.profile_role !== "admin" || (role !== "owner" && role !== "administrator")) {
+      throw new Error("forbidden");
+    }
+    if (data.userId === context.userId) return { ok: false as const, error: "self" };
+    const target = await sql<{ role: string | null; is_active: boolean }>`
+      select p.role, p.is_active from profiles p where p.user_id = ${data.userId} limit 1
+    `;
+    if (!target.length) return { ok: false as const, error: "not_found" };
+    if (target[0].role === "admin") return { ok: false as const, error: "admin_protected" };
+    if (target[0].is_active === data.isActive) return { ok: true as const, data: { isActive: data.isActive, revokedSessions: 0 } };
+    await sql`update profiles set is_active = ${data.isActive}, updated_at = now() where user_id = ${data.userId}`;
+    const revoked = data.isActive ? [] : await sql<{ id: string }>`
+      delete from "session" where "userId" = ${data.userId} returning id
+    `;
+    await sql`
+      insert into admin_audit_events (actor_user_id, action, target_user_id, details)
+      values (${context.userId}, ${data.isActive ? "user.reactivated" : "user.deactivated"}, ${data.userId},
+        jsonb_build_object('reason', ${data.reason}, 'isActive', ${data.isActive}, 'revokedSessions', ${revoked.length}))
+    `;
+    return { ok: true as const, data: { isActive: data.isActive, revokedSessions: revoked.length } };
   });

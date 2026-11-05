@@ -8,7 +8,7 @@ import { formatChatTime } from "@/lib/format";
 import { AdminReportNotes } from "@/components/admin-report-notes";
 import { AdminInsights } from "@/components/admin-insights";
 import { AdminDashboard } from "@/components/admin-dashboard";
-import { adminGetUserDetails } from "@/server/admin-user-details";
+import { adminGetUserDetails, adminSetUserActive } from "@/server/admin-user-details";
 import {
   adminCreateUser,
   adminCreateAnnouncement,
@@ -42,7 +42,7 @@ export function AdminScreen() {
   const [tab, setTab] = useState<Tab>("dashboard");
   const [q, setQ] = useState("");
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
-  const [userStatusFilter, setUserStatusFilter] = useState<"all" | "active" | "restricted">("all");
+  const [userStatusFilter, setUserStatusFilter] = useState<"all" | "active" | "restricted" | "deactivated">("all");
   const [reportStatus, setReportStatus] = useState("");
   const [announcementTitle, setAnnouncementTitle] = useState("");
   const [announcementBody, setAnnouncementBody] = useState("");
@@ -98,7 +98,8 @@ export function AdminScreen() {
   });
   const [draft, setDraft] = useState<{ email: string; displayName: string; username: string } | null>(null);
   const visibleUsers = (users.data ?? []).filter((user) =>
-    userStatusFilter === "all" || (userStatusFilter === "restricted" ? user.suspended : !user.suspended),
+    userStatusFilter === "all" ||
+    (userStatusFilter === "restricted" ? user.suspended : userStatusFilter === "deactivated" ? !user.isActive : user.isActive && !user.suspended),
   );
 
   if (meQ.isLoading) return <div className="grid h-dvh place-items-center bg-shell">{t("appName")}</div>;
@@ -169,13 +170,28 @@ export function AdminScreen() {
                 <option value="all">{locale === "fa" ? "همه کاربران" : "All users"}</option>
                 <option value="active">{locale === "fa" ? "فعال و بدون محدودیت" : "Active"}</option>
                 <option value="restricted">{locale === "fa" ? "مسدود یا محدودشده" : "Restricted"}</option>
+                <option value="deactivated">{locale === "fa" ? "حساب‌های غیرفعال" : "Deactivated"}</option>
               </select>
             </div>
             {selectedUserId ? (
               <section className="space-y-3 rounded-xl border border-line bg-panel p-4" aria-live="polite">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div><h3 className="font-semibold">{userDetails.data?.profile.displayName ?? (locale === "fa" ? "جزئیات حساب کاربر" : "User account details")}</h3><p className="text-xs text-muted">{userDetails.data?.profile.email ?? selectedUserId}</p></div>
-                  <button type="button" onClick={() => setSelectedUserId(null)} className="rounded-full bg-header px-3 py-2 text-sm">{locale === "fa" ? "بستن" : "Close"}</button>
+                  <div className="flex flex-wrap gap-2">
+                    {userDetails.data ? <button type="button" className="rounded-full bg-header px-3 py-2 text-sm" onClick={() => {
+                      const isActive = !userDetails.data!.profile.isActive;
+                      const reason = window.prompt(locale === "fa" ? (isActive ? "دلیل فعال‌سازی مجدد حساب" : "دلیل غیرفعال‌سازی حساب") : (isActive ? "Reason for reactivating this account" : "Reason for deactivating this account"), "");
+                      if (reason === null || reason.trim().length < 3) return;
+                      void adminSetUserActive({ data: { userId: selectedUserId!, isActive, reason } }).then((res) => {
+                        if (!res.ok) { toast.error(err(res.error)); return; }
+                        toast.success(locale === "fa" ? (isActive ? "حساب فعال شد." : `حساب غیرفعال شد؛ ${res.data.revokedSessions} نشست لغو شد.`) : (isActive ? "Account reactivated." : `Account deactivated; ${res.data.revokedSessions} sessions revoked.`));
+                        void qc.invalidateQueries({ queryKey: ["admin-user-details", selectedUserId] });
+                        void qc.invalidateQueries({ queryKey: ["admin-users"] });
+                        void qc.invalidateQueries({ queryKey: ["admin-dashboard"] });
+                      });
+                    }}>{userDetails.data.profile.isActive ? (locale === "fa" ? "غیرفعال‌سازی حساب" : "Deactivate account") : (locale === "fa" ? "فعال‌سازی مجدد" : "Reactivate account")}</button> : null}
+                    <button type="button" onClick={() => setSelectedUserId(null)} className="rounded-full bg-header px-3 py-2 text-sm">{locale === "fa" ? "بستن" : "Close"}</button>
+                  </div>
                 </div>
                 {userDetails.isLoading ? <p className="text-sm text-muted">{locale === "fa" ? "در حال دریافت اطلاعات حساب…" : "Loading account details…"}</p> : null}
                 {userDetails.isError ? <p role="alert" className="text-sm text-danger">{locale === "fa" ? "دریافت جزئیات حساب ناموفق بود." : "Could not load account details."}</p> : null}
@@ -183,7 +199,7 @@ export function AdminScreen() {
                   <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
                     <div><dt className="text-muted">{locale === "fa" ? "شناسه ثابت کاربر" : "Immutable user ID"}</dt><dd className="break-all">{userDetails.data.profile.userId}</dd></div>
                     <div><dt className="text-muted">{t("username")}</dt><dd dir="ltr">@{userDetails.data.profile.username ?? "—"}</dd></div>
-                    <div><dt className="text-muted">{locale === "fa" ? "وضعیت حساب" : "Account status"}</dt><dd>{userDetails.data.profile.suspended ? t("ban") : (locale === "fa" ? "فعال" : "Active")}</dd></div>
+                    <div><dt className="text-muted">{locale === "fa" ? "وضعیت حساب" : "Account status"}</dt><dd>{!userDetails.data.profile.isActive ? (locale === "fa" ? "غیرفعال" : "Deactivated") : userDetails.data.profile.suspended ? t("ban") : (locale === "fa" ? "فعال" : "Active")}</dd></div>
                     <div><dt className="text-muted">{locale === "fa" ? "تأیید ایمیل" : "Email verification"}</dt><dd>{userDetails.data.profile.emailVerified ? (locale === "fa" ? "تأییدشده" : "Verified") : (locale === "fa" ? "تأییدنشده" : "Not verified")}</dd></div>
                     <div><dt className="text-muted">{locale === "fa" ? "تأیید شماره تلفن" : "Phone verification"}</dt><dd>{userDetails.data.profile.phoneVerified ? (locale === "fa" ? "تأییدشده" : "Verified") : (locale === "fa" ? "تأییدنشده" : "Not verified")}</dd></div>
                     <div><dt className="text-muted">{locale === "fa" ? "روش ثبت‌نام" : "Registration method"}</dt><dd>{userDetails.data.profile.registrationMethods.join(", ") || "—"}</dd></div>
@@ -245,7 +261,7 @@ export function AdminScreen() {
                       <td className="px-3 py-2">{u.displayName}</td>
                       <td className="px-3 py-2">{u.email}</td>
                       <td className="px-3 py-2">{u.username}</td>
-                      <td className="px-3 py-2">{u.suspended ? t("ban") : u.role === "admin" ? t("adminRole") : t("userRole")}</td>
+                      <td className="px-3 py-2">{!u.isActive ? (locale === "fa" ? "غیرفعال" : "Deactivated") : u.suspended ? t("ban") : u.role === "admin" ? t("adminRole") : t("userRole")}</td>
                       <td className="px-3 py-2">{formatChatTime(u.lastSeenAt, locale, t)}</td>
                       <td className="px-3 py-2">
                         <div className="flex flex-wrap gap-2">

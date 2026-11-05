@@ -1975,12 +1975,13 @@ export const adminListUsers = createServerFn({ method: "GET" })
       phone: string | null;
       role: string | null;
       suspended: unknown;
+      is_active: unknown;
       about: string | null;
       created_at: unknown;
       last_seen_at: unknown;
     }>`
       select u.id, u.email, p.username, coalesce(p.display_name, u.name) as display_name,
-             p.phone, p.role, p.suspended, p.about, coalesce(p.created_at, u."createdAt") as created_at,
+             p.phone, p.role, p.suspended, coalesce(p.is_active, true) as is_active, p.about, coalesce(p.created_at, u."createdAt") as created_at,
              p.last_seen_at
       from "user" u
       left join profiles p on p.user_id = u.id
@@ -2000,6 +2001,7 @@ export const adminListUsers = createServerFn({ method: "GET" })
       phone: r.phone,
       role: roleOf(r.role || "user"),
       suspended: bool(r.suspended),
+      isActive: bool(r.is_active),
       about: r.about || "",
       createdAt: iso(r.created_at) ?? "",
       lastSeenAt: iso(r.last_seen_at),
@@ -2217,30 +2219,12 @@ export const adminDeleteUser = createServerFn({ method: "POST" })
     return { userId };
   })
   .middleware([authMiddleware])
-  .handler(async ({ context, data }) => {
+  .handler(async ({ context }) => {
     const sql = await getSql();
-    const admin = await requireAdmin(sql, context.userId);
-    if (data.userId === admin.user_id) return err("self");
-    const target = await profileOf(sql, data.userId);
-    if (target?.role === "admin") {
-      const admins = await sql<{ n: number }>`select count(*)::int as n from profiles where role = 'admin'`;
-      if (num(admins[0]?.n) <= 1) return err("last_admin");
-    }
-    const id = data.userId;
-    await sql`delete from messages where sender_id = ${id}`;
-    await sql`delete from statuses where user_id = ${id}`;
-    await sql`delete from status_views where viewer_id = ${id}`;
-    await sql`delete from blocks where blocker_id = ${id} or blocked_id = ${id}`;
-    await sql`delete from contacts where owner_id = ${id} or contact_id = ${id}`;
-    await sql`delete from typing where user_id = ${id}`;
-    await sql`delete from calls where caller_id = ${id} or callee_id = ${id}`;
-    await sql`delete from chat_members where user_id = ${id}`;
-    await sql`delete from profiles where user_id = ${id}`;
-    await sql`delete from "session" where "userId" = ${id}`;
-    await sql`delete from "account" where "userId" = ${id}`;
-    await sql`delete from "user" where id = ${id}`;
-    await auditAdminEvent(sql, context.userId, "user.deleted", id, { hardDelete: true });
-    return ok(true);
+    await requireAdmin(sql, context.userId);
+    // Irreversible account deletion is intentionally disabled. Use the audited,
+    // reversible deactivation workflow until a retention-aware deletion process exists.
+    return err("hard_delete_disabled");
   });
 
 export const adminListGroups = createServerFn({ method: "GET" })

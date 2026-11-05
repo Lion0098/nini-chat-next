@@ -50,13 +50,14 @@ export const authMiddleware = createMiddleware({ type: "function" })
     // policy off instead of locking the installation permanently.
     const { getSql } = await import("@/lib/db");
     const sql = await getSql();
-    const rows = await sql<{ email: string; email_verified: boolean; phone_verified: boolean; role: string | null }>`
+    const rows = await sql<{ email: string; email_verified: boolean; phone_verified: boolean; role: string | null; is_active: boolean }>`
       select u.email, u."emailVerified" as email_verified,
              coalesce(u."phoneNumberVerified", false) as phone_verified,
-             p.role
+             p.role, coalesce(p.is_active, true) as is_active
       from "user" u left join profiles p on p.user_id = u.id
       where u.id = ${userId} limit 1`;
     const current = rows[0];
+    if (current && !current.is_active) throw new Error("account_deactivated");
     if (current && !["admin", "owner", "administrator"].includes(current.role ?? "")) {
       let settings: { key: string; value: string }[] = [];
       try {
