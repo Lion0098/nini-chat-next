@@ -45,7 +45,7 @@ export const adminGetUserDetails = createServerFn({ method: "GET" })
     const user = rows[0];
     if (!user) throw new Error("not_found");
 
-    const [providers, sessions, sessionCount, restrictions, events, groups] = await Promise.all([
+    const [providers, sessions, sessionCount, restrictions, events, groups, memberships] = await Promise.all([
       sql<any>`select distinct "providerId" as provider from account where "userId" = ${data.userId} order by provider`,
       sql<any>`select "userAgent" as user_agent, "createdAt" as created_at, "expiresAt" as expires_at
         from "session" where "userId" = ${data.userId} and "expiresAt" > now()
@@ -67,6 +67,14 @@ export const adminGetUserDetails = createServerFn({ method: "GET" })
         order by e.created_at desc, e.id desc limit 15`,
       sql<any>`select count(*)::int as count from chat_members cm
         join chats c on c.id = cm.chat_id where cm.user_id = ${data.userId} and c.kind = 'group'`,
+      sql<any>`select h.action, h.old_role, h.new_role, h.created_at, c.title as group_title,
+          coalesce(ap.display_name, au.name, h.actor_user_id, 'System') as actor_name
+        from group_membership_history h
+        left join chats c on c.id = h.chat_id
+        left join profiles ap on ap.user_id = h.actor_user_id
+        left join "user" au on au.id = h.actor_user_id
+        where h.subject_user_id = ${data.userId}
+        order by h.created_at desc, h.id desc limit 15`,
     ]);
 
     return {
@@ -97,6 +105,11 @@ export const adminGetUserDetails = createServerFn({ method: "GET" })
       })),
       events: events.map((row: any) => ({
         action: String(row.action), actorName: String(row.actor_name), createdAt: iso(row.created_at),
+      })),
+      memberships: memberships.map((row: any) => ({
+        action: String(row.action), groupTitle: String(row.group_title ?? "Deleted group"),
+        actorName: String(row.actor_name), oldRole: row.old_role == null ? null : String(row.old_role),
+        newRole: row.new_role == null ? null : String(row.new_role), createdAt: iso(row.created_at),
       })),
     };
   });
@@ -140,4 +153,39 @@ export const adminSetUserActive = createServerFn({ method: "POST" })
         jsonb_build_object('reason', ${data.reason}, 'isActive', ${data.isActive}, 'revokedSessions', ${revoked.length}))
     `;
     return { ok: true as const, data: { isActive: data.isActive, revokedSessions: revoked.length } };
+  });
+
+
+export const adminRequestUserPasswordReset = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const userId = cleanUserId((input as { userId?: unknown } | null)?.userId);
+    if (!userId) throw new Error("bad_input");
+    return { userId };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    const actor = await sql<{ profile_role: string | null; assigned_role: string | null }>`
+      select p.role as profile_role, a.role as assigned_role
+      from profiles p left join admin_role_assignments a on a.user_id = p.user_id
+      where p.user_id = ${context.userId} limit 1
+    `;
+    const role = actor[0]?.assigned_role;
+    if (actor[0]?.profile_role !== "admin" || (role !== "owner" && role !== "administrator")) throw new Error("forbidden");
+    const target = await sql<{ email: string; email_verified: boolean; name: string }>`
+      select u.email, u."emailVerified" as email_verified, u.name
+      from "user" u where u.id = ${data.userId} limit 1
+    `;
+    if (!target.length) return { ok: false as const, error: "not_found" };
+    if (!target[0].email_verified || target[0].email.endsWith("@phone.nini.invalid")) return { ok: false as const, error: "verified_email_required" };
+    if (!process.env.BETTER_AUTH_URL?.trim() || !process.env.RESEND_API_KEY?.trim() || !process.env.RESEND_FROM_EMAIL?.trim()) {
+      return { ok: false as const, error: "email_delivery_not_configured" };
+    }
+    const { auth } = await import("@/lib/auth/server");
+    await auth.api.requestPasswordReset({
+      body: { email: target[0].email, redirectTo: `${process.env.BETTER_AUTH_URL.trim().replace(/\/+$/, "")}/reset-password` },
+    });
+    await sql`insert into admin_audit_events (actor_user_id, action, target_user_id, details)
+      values (${context.userId}, 'user.password_reset_requested', ${data.userId}, jsonb_build_object('delivery', 'queued'))`;
+    return { ok: true as const, data: true };
   });

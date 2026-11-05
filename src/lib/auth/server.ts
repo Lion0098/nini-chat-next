@@ -36,7 +36,7 @@ import { getCookie } from "@tanstack/react-start/server";
 import { randomBytes } from "node:crypto";
 import { Pool } from "pg";
 import { ensureDbReady, getPglite, getSql } from "../db";
-import { sendVerificationEmail as deliverVerificationEmail } from "../email/resend";
+import { sendVerificationEmail as deliverVerificationEmail, sendPasswordResetEmail } from "../email/resend";
 import { assertSmsIrConfigured } from "../sms/sms-ir";
 import { assertPhoneOtpConfigured, sendPhoneOtp, verifyPhoneOtp } from "./phone-otp.server";
 import { emailAndPasswordEnabled } from "./email-password";
@@ -217,6 +217,7 @@ export const auth = betterAuth({
       "/sign-up/email": { window: 60, max: 5 },
       "/sign-in/email": { window: 60, max: 10 },
       "/send-verification-email": { window: 60, max: 3 },
+      "/request-password-reset": { window: 60, max: 3 },
       "/phone-number/send-otp": { window: 60, max: 2 },
       "/phone-number/verify": { window: 60, max: 8 },
     },
@@ -238,7 +239,19 @@ export const auth = betterAuth({
 
   // Local email/password — toggled only via `./email-password` (not a plugin).
   ...(!authDisabled && emailAndPasswordEnabled
-    ? { emailAndPassword: { enabled: true, requireEmailVerification: false, minPasswordLength: 8 } }
+    ? { emailAndPassword: {
+        enabled: true,
+        requireEmailVerification: false,
+        minPasswordLength: 8,
+        revokeSessionsOnPasswordReset: true,
+        resetPasswordTokenExpiresIn: 30 * 60,
+        sendResetPassword: ({ user, url }) => {
+          // Do not await delivery: the public reset endpoint must not leak account existence by timing.
+          void sendPasswordResetEmail(user.email, url, user.name).catch(() => {
+            console.error("[email] password-reset delivery failed; inspect Resend configuration.");
+          });
+        },
+      } }
     : {}),
 
   // `__Host-` prefixed cookies: the browser REFUSES any same-named cookie that

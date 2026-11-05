@@ -8,7 +8,7 @@ import { formatChatTime } from "@/lib/format";
 import { AdminReportNotes } from "@/components/admin-report-notes";
 import { AdminInsights } from "@/components/admin-insights";
 import { AdminDashboard } from "@/components/admin-dashboard";
-import { adminGetUserDetails, adminSetUserActive } from "@/server/admin-user-details";
+import { adminGetUserDetails, adminSetUserActive, adminRequestUserPasswordReset } from "@/server/admin-user-details";
 import {
   adminCreateUser,
   adminCreateAnnouncement,
@@ -190,6 +190,13 @@ export function AdminScreen() {
                         void qc.invalidateQueries({ queryKey: ["admin-dashboard"] });
                       });
                     }}>{userDetails.data.profile.isActive ? (locale === "fa" ? "غیرفعال‌سازی حساب" : "Deactivate account") : (locale === "fa" ? "فعال‌سازی مجدد" : "Reactivate account")}</button> : null}
+                    <button type="button" disabled={!userDetails.data.profile.emailVerified} title={!userDetails.data.profile.emailVerified ? (locale === "fa" ? "ابتدا باید ایمیل کاربر تأیید شود." : "The user's email must be verified first.") : undefined} className="rounded-full bg-header px-3 py-2 text-sm disabled:opacity-40" onClick={() => {
+                      if (!window.confirm(locale === "fa" ? "لینک بازیابی رمز به ایمیل تأییدشده کاربر ارسال شود؟" : "Send a password-reset link to the user's verified email?")) return;
+                      void adminRequestUserPasswordReset({ data: { userId: selectedUserId! } }).then((res) => {
+                        if (!res.ok) toast.error(err(res.error));
+                        else toast.success(locale === "fa" ? "درخواست ارسال لینک بازیابی ثبت شد." : "Password-reset email request queued.");
+                      });
+                    }}>{locale === "fa" ? "ارسال لینک بازیابی رمز" : "Send password reset"}</button>
                     <button type="button" onClick={() => setSelectedUserId(null)} className="rounded-full bg-header px-3 py-2 text-sm">{locale === "fa" ? "بستن" : "Close"}</button>
                   </div>
                 </div>
@@ -214,6 +221,7 @@ export function AdminScreen() {
                     <div className="rounded-lg bg-header p-3"><h4 className="mb-2 text-sm font-semibold">{locale === "fa" ? "دستگاه‌ها و نشست‌های فعال" : "Active devices and sessions"}</h4>{userDetails.data.sessions.length ? userDetails.data.sessions.map((session, index) => <div key={`${session.createdAt}-${index}`} className="border-t border-line py-2 text-xs"><p className="break-words">{session.userAgent}</p><p className="mt-1 text-muted">{locale === "fa" ? "شروع:" : "Started:"} {formatChatTime(session.createdAt, locale, t)} · {locale === "fa" ? "انقضا:" : "Expires:"} {formatChatTime(session.expiresAt, locale, t)}</p></div>) : <p className="text-xs text-muted">{locale === "fa" ? "نشست فعالی وجود ندارد." : "No active sessions."}</p>}</div>
                     <div className="rounded-lg bg-header p-3"><h4 className="mb-2 text-sm font-semibold">{locale === "fa" ? "سوابق محدودیت حساب" : "Restriction history"}</h4>{userDetails.data.restrictions.length ? userDetails.data.restrictions.map((item, index) => <div key={`${item.createdAt}-${index}`} className="border-t border-line py-2 text-xs"><p>{item.reason}</p><p className="mt-1 text-muted">{item.actorName} · {formatChatTime(item.createdAt, locale, t)} · {item.revokedAt ? (locale === "fa" ? "رفع‌شده" : "Revoked") : item.expiresAt ? formatChatTime(item.expiresAt, locale, t) : (locale === "fa" ? "بدون انقضا" : "No expiry")}</p></div>) : <p className="text-xs text-muted">{locale === "fa" ? "سابقه‌ای ثبت نشده است." : "No restriction history."}</p>}</div>
                   </div>
+                  <div className="rounded-lg bg-header p-3"><h4 className="mb-2 text-sm font-semibold">{locale === "fa" ? "تاریخچه عضویت در گروه‌ها" : "Group membership history"}</h4>{userDetails.data.memberships.length ? userDetails.data.memberships.map((item, index) => <div key={`${item.action}-${item.createdAt}-${index}`} className="flex flex-wrap justify-between gap-2 border-t border-line py-2 text-xs"><span>{item.groupTitle} · {item.action}{item.newRole ? ` · ${item.newRole}` : ""}</span><span className="text-muted">{item.actorName} · {formatChatTime(item.createdAt, locale, t)}</span></div>) : <p className="text-xs text-muted">{locale === "fa" ? "سابقه عضویت گروهی ثبت نشده است." : "No group membership history."}</p>}</div>
                   <div className="rounded-lg bg-header p-3"><h4 className="mb-2 text-sm font-semibold">{locale === "fa" ? "آخرین اقدامات مدیریتی روی حساب" : "Recent administrative account events"}</h4>{userDetails.data.events.length ? userDetails.data.events.map((item, index) => <div key={`${item.action}-${item.createdAt}-${index}`} className="flex flex-wrap justify-between gap-2 border-t border-line py-2 text-xs"><span>{item.action} · {item.actorName}</span><time className="text-muted">{formatChatTime(item.createdAt, locale, t)}</time></div>) : <p className="text-xs text-muted">{locale === "fa" ? "رویدادی ثبت نشده است." : "No account events recorded."}</p>}</div>
                 </> : null}
               </section>
