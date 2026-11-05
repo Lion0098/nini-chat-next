@@ -7,6 +7,7 @@ import { usePrefs } from "@/lib/prefs";
 import { formatChatTime } from "@/lib/format";
 import { AdminReportNotes } from "@/components/admin-report-notes";
 import { AdminInsights } from "@/components/admin-insights";
+import { AdminDashboard } from "@/components/admin-dashboard";
 import {
   adminCreateUser,
   adminCreateAnnouncement,
@@ -38,7 +39,7 @@ export function AdminScreen() {
   const { t, err, locale } = usePrefs();
   const qc = useQueryClient();
   const meQ = useQuery({ queryKey: ["me"], queryFn: () => getMe() });
-  const [tab, setTab] = useState<Tab>("users");
+  const [tab, setTab] = useState<Tab>("dashboard");
   const [q, setQ] = useState("");
   const [reportStatus, setReportStatus] = useState("");
   const [announcementTitle, setAnnouncementTitle] = useState("");
@@ -132,22 +133,7 @@ export function AdminScreen() {
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("searchUsersPh")} className="mb-4 h-11 w-full rounded-lg bg-panel px-3 outline-none" />
         ) : null}
         {tab === "dashboard" ? (
-          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {[
-              [locale === "fa" ? "کل کاربران" : "Total users", dashboard.data?.users],
-              [locale === "fa" ? "حساب‌های فعال" : "Active accounts", dashboard.data?.active],
-              [locale === "fa" ? "مسدودشده‌ها" : "Suspended accounts", dashboard.data?.suspended],
-              [locale === "fa" ? "مدیران دارای نقش" : "Privileged accounts", dashboard.data?.admins],
-              [locale === "fa" ? "گروه‌ها" : "Groups", dashboard.data?.groups],
-              [locale === "fa" ? "گزارش‌های باز" : "Open reports", dashboard.data?.reports],
-            ].map(([title, value]) => (
-              <article key={String(title)} className="rounded-xl bg-panel p-4">
-                <p className="text-sm text-muted">{title}</p>
-                <p className="mt-2 text-2xl font-semibold">{dashboard.isLoading ? "…" : Number(value ?? 0).toLocaleString(locale === "fa" ? "fa-IR" : "en-US")}</p>
-              </article>
-            ))}
-            <p className="text-xs text-muted sm:col-span-2 lg:col-span-3">{locale === "fa" ? `نقش دسترسی شما: ${dashboard.data?.viewerRole ?? "—"}` : `Your access role: ${dashboard.data?.viewerRole ?? "—"}`}</p>
-          </section>
+          <AdminDashboard locale={locale} stats={dashboard.data} loading={dashboard.isLoading} onNavigate={(nextTab) => setTab(nextTab)} />
         ) : null}
         {tab === "insights" ? <AdminInsights locale={locale} /> : null}
         {tab === "audit" ? (
