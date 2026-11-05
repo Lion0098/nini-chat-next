@@ -1167,7 +1167,7 @@ function SidePane({
                     <button
                       type="button"
                       className="mt-3 h-10 w-full rounded-full bg-panel text-sm font-medium"
-                      onClick={() => void authClient.sendVerificationEmail({ email: me.email, callbackURL: window.location.origin }).then((res) => {
+                      onClick={() => void authClient.sendVerificationEmail({ email: me.email, callbackURL: window.location.origin }).then((res: { error?: { message?: string } | null }) => {
                         if (res.error) toast.error(locale === "fa" ? "ارسال ایمیل تأیید انجام نشد؛ تنظیمات سرویس ایمیل را بررسی کن." : "Could not send verification email; check email provider configuration.");
                         else toast.success(locale === "fa" ? "اگر سرویس ایمیل تنظیم شده باشد، لینک تأیید ارسال می‌شود." : "If email delivery is configured, a verification link will be sent.");
                       }).catch(() => toast.error(t("errGeneric")))}
