@@ -133,7 +133,7 @@ export function AdminScreen() {
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("searchUsersPh")} className="mb-4 h-11 w-full rounded-lg bg-panel px-3 outline-none" />
         ) : null}
         {tab === "dashboard" ? (
-          <AdminDashboard locale={locale} stats={dashboard.data} loading={dashboard.isLoading} onNavigate={(nextTab) => setTab(nextTab)} />
+          <AdminDashboard locale={locale} stats={dashboard.data} loading={dashboard.isLoading} statsError={dashboard.isError} onNavigate={(nextTab) => setTab(nextTab)} />
         ) : null}
         {tab === "insights" ? <AdminInsights locale={locale} /> : null}
         {tab === "audit" ? (

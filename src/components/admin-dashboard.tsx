@@ -4,14 +4,14 @@ import { adminGetAnalyticsOverview, adminGetOperationalStatus, adminListAuditEve
 type DashboardStats = { users?: number; active?: number; suspended?: number; admins?: number; groups?: number; reports?: number; viewerRole?: string };
 type DashboardTab = "users" | "groups" | "reports" | "audit" | "insights" | "ops";
 
-export function AdminDashboard({ locale, stats, loading, onNavigate }: { locale: string; stats?: DashboardStats; loading: boolean; onNavigate: (tab: DashboardTab) => void }) {
+export function AdminDashboard({ locale, stats, loading, statsError = false, onNavigate }: { locale: string; stats?: DashboardStats; loading: boolean; statsError?: boolean; onNavigate: (tab: DashboardTab) => void }) {
   const fa = locale === "fa";
   const queryClient = useQueryClient();
   const analytics = useQuery({ queryKey: ["admin-insights-overview"], queryFn: () => adminGetAnalyticsOverview(), staleTime: 60_000 });
   const audit = useQuery({ queryKey: ["admin-dashboard-recent-events"], queryFn: () => adminListAuditEvents({ data: { q: "", limit: 8 } }), staleTime: 30_000 });
   const canViewOps = ["owner", "administrator", "auditor"].includes(stats?.viewerRole ?? "");
   const operations = useQuery({ queryKey: ["admin-operational-status"], queryFn: () => adminGetOperationalStatus(), enabled: canViewOps, staleTime: 120_000, retry: false });
-  const number = (value: unknown) => Number(value ?? 0).toLocaleString(fa ? "fa-IR" : "en-US");
+  const number = (value: unknown) => value == null ? "—" : Number(value).toLocaleString(fa ? "fa-IR" : "en-US");
   const overview = analytics.data;
   const days = (overview?.daily ?? []).slice(-14);
   const maxMessages = Math.max(1, ...days.map((day: { messages?: number }) => Number(day.messages ?? 0)));
@@ -40,11 +40,12 @@ export function AdminDashboard({ locale, stats, loading, onNavigate }: { locale:
     <div className="space-y-5">
       <section className="flex flex-wrap items-center justify-between gap-3">
         <div><h2 className="text-lg font-semibold">{fa ? "نمای کلی سامانه" : "System overview"}</h2><p className="mt-1 text-xs text-muted">{fa ? "آمار و وضعیت قابل مشاهده برای نقش مدیریتی شما" : "Metrics and system status available to your admin role"}</p></div>
-        <button type="button" onClick={refresh} className="h-10 rounded-full bg-panel px-4 text-sm" disabled={analytics.isFetching || audit.isFetching}>{fa ? "به‌روزرسانی اطلاعات" : "Refresh dashboard"}</button>
+        <button type="button" onClick={refresh} className="h-10 rounded-full bg-panel px-4 text-sm" disabled={analytics.isFetching || audit.isFetching || operations.isFetching}>{fa ? "به‌روزرسانی اطلاعات" : "Refresh dashboard"}</button>
       </section>
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
         {cards.map((card) => <article key={card.label} className="rounded-xl bg-panel p-4"><p className="text-xs text-muted">{card.label}</p><p className="mt-2 text-2xl font-semibold">{loading || analytics.isLoading ? "…" : number(card.value)}</p></article>)}
       </section>
+      {statsError ? <p role="alert" className="rounded-lg bg-panel p-3 text-sm text-danger">{fa ? "دریافت آمار پایه داشبورد ناموفق بود؛ دوباره تلاش کنید." : "Dashboard summary could not be loaded. Please try again."}</p> : null}
       {analytics.isError ? <p role="alert" className="rounded-lg bg-panel p-3 text-sm text-danger">{fa ? "دریافت آمار تحلیلی ناموفق بود؛ بخش‌های دیگر داشبورد همچنان در دسترس‌اند." : "Analytics could not be loaded. Other dashboard sections remain available."}</p> : null}
       <section className="grid gap-4 lg:grid-cols-[1.5fr_1fr]">
         <article className="rounded-xl bg-panel p-4">
@@ -66,7 +67,8 @@ export function AdminDashboard({ locale, stats, loading, onNavigate }: { locale:
         <article className="rounded-xl bg-panel p-4">
           <div className="flex items-center justify-between gap-2"><h3 className="font-semibold">{fa ? "آخرین رویدادهای مدیریتی" : "Recent admin events"}</h3><button type="button" onClick={() => onNavigate("audit")} className="text-xs text-green-2">{fa ? "مشاهده همه" : "View all"}</button></div>
           {audit.isLoading ? <p className="mt-3 text-sm text-muted">{fa ? "در حال دریافت…" : "Loading…"}</p> : null}
-          {events.length === 0 && !audit.isLoading ? <p className="mt-3 text-sm text-muted">{fa ? "رویداد مدیریتی ثبت‌شده‌ای وجود ندارد." : "No admin events recorded."}</p> : null}
+          {audit.isError ? <p role="alert" className="mt-3 text-sm text-danger">{fa ? "دریافت رویدادهای مدیریتی ناموفق بود." : "Could not load admin events."}</p> : null}
+          {events.length === 0 && !audit.isLoading && !audit.isError ? <p className="mt-3 text-sm text-muted">{fa ? "رویداد مدیریتی ثبت‌شده‌ای وجود ندارد." : "No admin events recorded."}</p> : null}
           <div className="mt-3 space-y-2">{events.map((event: { id: string; action: string; actorName: string; targetName?: string | null; createdAt: string | null }) => <div key={event.id} className="flex items-start justify-between gap-3 border-b border-line pb-2 text-sm"><div className="min-w-0"><p className="font-medium">{event.action}</p><p className="text-xs text-muted">{event.actorName}{event.targetName ? " · " + event.targetName : ""}</p></div><time className="shrink-0 text-[11px] text-muted">{event.createdAt ? String(event.createdAt).replace("T", " ").slice(0, 16) : "—"}</time></div>)}</div>
         </article>
         <article className="rounded-xl bg-panel p-4">
