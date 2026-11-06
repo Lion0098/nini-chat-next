@@ -177,6 +177,9 @@ export type AdminGroup = {
   members: number;
   createdAt: string;
   updatedAt: string;
+  archivedAt: string | null;
+  visibility: string;
+  joinPolicy: string;
 };
 
 export type AdminReport = {
