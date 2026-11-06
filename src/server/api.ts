@@ -1863,18 +1863,22 @@ export const adminGetDashboard = createServerFn({ method: "GET" })
     return { ...rows[0], viewerRole: role, viewerPermissions: permissionsForRole(role) };
   });
 
-function sanitizeAuditDetails(value: unknown, depth = 0): unknown {
+type AuditJsonValue = null | boolean | number | string | AuditJsonValue[] | { [key: string]: AuditJsonValue };
+
+function sanitizeAuditDetails(value: unknown, depth = 0): AuditJsonValue {
   if (depth > 4) return "[truncated]";
-  if (value === null || typeof value === "boolean" || typeof value === "number") return value;
+  if (value === null) return null;
+  if (typeof value === "boolean" || typeof value === "number") return value;
   if (typeof value === "string") return value.length > 500 ? `${value.slice(0, 500)}…` : value;
-  if (Array.isArray(value)) return value.slice(0, 30).map((item) => sanitizeAuditDetails(item, depth + 1));
+  if (Array.isArray(value)) return value.slice(0, 30).map((item): AuditJsonValue => sanitizeAuditDetails(item, depth + 1));
   if (typeof value === "object") {
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 50).map(([key, item]) => [
-      key,
-      /(password|passphrase|token|secret|otp|api.?key|credential|authorization|cookie|session|private.?key)/i.test(key)
+    const safe: { [key: string]: AuditJsonValue } = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>).slice(0, 50)) {
+      safe[key] = /(password|passphrase|token|secret|otp|api.?key|credential|authorization|cookie|session|private.?key)/i.test(key)
         ? "[redacted]"
-        : sanitizeAuditDetails(item, depth + 1),
-    ]));
+        : sanitizeAuditDetails(item, depth + 1);
+    }
+    return safe;
   }
   return String(value).slice(0, 200);
 }

@@ -34,6 +34,7 @@ import {
 } from "@/server/api";
 
 type Tab = "dashboard" | "users" | "groups" | "reports" | "appeals" | "audit" | "system" | "ops" | "insights";
+type AuditPage = Awaited<ReturnType<typeof adminListAuditEvents>>;
 
 export function AdminScreen() {
   const { t, err, locale } = usePrefs();
@@ -54,10 +55,10 @@ export function AdminScreen() {
   const [auditAction, setAuditAction] = useState("");
   const [auditFromDate, setAuditFromDate] = useState("");
   const [auditToDate, setAuditToDate] = useState("");
-  const audit = useInfiniteQuery({
+  const audit = useInfiniteQuery<AuditPage, Error>({
     queryKey: ["admin-audit", q, auditAction, auditFromDate, auditToDate],
     initialPageParam: "",
-    queryFn: ({ pageParam }) => adminListAuditEvents({ data: { q, action: auditAction, fromDate: auditFromDate, toDate: auditToDate, limit: 50, cursor: pageParam } }),
+    queryFn: ({ pageParam }) => adminListAuditEvents({ data: { q, action: auditAction, fromDate: auditFromDate, toDate: auditToDate, limit: 50, cursor: pageParam as string } }),
     getNextPageParam: (lastPage) => lastPage.ok ? (lastPage.data.nextCursor ?? undefined) : undefined,
     enabled: meQ.data?.role === "admin" && tab === "audit",
   });
