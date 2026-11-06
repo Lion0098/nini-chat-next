@@ -1,7 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { createHash, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { detectFileType, storeFile, getStoredFilePath, deleteStoredFile, type StorageCategory } from "@/lib/file-storage";
+import { arch, cpus, freemem, loadavg, platform, totalmem, uptime as hostUptime } from "node:os";
+import { detectFileType, storeFile, getStoredFilePath, deleteStoredFile, getStorageFilesystemStats, type StorageCategory } from "@/lib/file-storage";
 import { sendAdminInvitationEmail } from "@/lib/email/resend";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { hasAdminPermission, permissionsForRole, type AdminPermission } from "@/lib/auth/admin-permissions";
@@ -3346,6 +3347,33 @@ export const adminGetOperationalStatus = createServerFn({ method: "GET" })
     return { checkedAt: new Date().toISOString(), checks };
   });
 
+
+// Prefer cgroup limits/usage so container memory is not mistaken for host RAM.
+async function runtimeMemoryStats() {
+  try {
+    const [limitRaw,currentRaw]=await Promise.all([readFile("/sys/fs/cgroup/memory.max","utf8"),readFile("/sys/fs/cgroup/memory.current","utf8")]);
+    const totalBytes=Number(limitRaw.trim()),usedBytes=Number(currentRaw.trim());
+    if(Number.isFinite(totalBytes)&&totalBytes>0&&Number.isFinite(usedBytes)&&usedBytes>=0)return {totalBytes,usedBytes,freeBytes:Math.max(0,totalBytes-usedBytes),source:"cgroup_v2" as const};
+  } catch { /* cgroup v2 is unavailable in this runtime */ }
+  try {
+    const [limitRaw,currentRaw]=await Promise.all([readFile("/sys/fs/cgroup/memory/memory.limit_in_bytes","utf8"),readFile("/sys/fs/cgroup/memory/memory.usage_in_bytes","utf8")]);
+    const totalBytes=Number(limitRaw.trim()),usedBytes=Number(currentRaw.trim());
+    if(Number.isFinite(totalBytes)&&totalBytes>0&&totalBytes<Number.MAX_SAFE_INTEGER&&Number.isFinite(usedBytes)&&usedBytes>=0)return {totalBytes,usedBytes,freeBytes:Math.max(0,totalBytes-usedBytes),source:"cgroup_v1" as const};
+  } catch { /* cgroup v1 is unavailable in this runtime */ }
+  const totalBytes=totalmem(),freeBytes=freemem();return {totalBytes,freeBytes,usedBytes:Math.max(0,totalBytes-freeBytes),source:"os" as const};
+}
+
+// Phase 11: measured application runtime and database monitoring.
+export const adminGetServerMonitoring = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const sql = await getSql(); await requireAdminPermission(sql, context.userId, "server.monitor.read");
+    const memory=process.memoryUsage(), cpuInfo=cpus(), storageFilesystem=await getStorageFilesystemStats(), runtimeMemory=await runtimeMemoryStats();
+    let database:{available:boolean;sizeBytes:number|null;activeConnections:number|null;maxConnections:number|null;latencyMs:number|null}={available:false,sizeBytes:null,activeConnections:null,maxConnections:null,latencyMs:null};
+    const started=Date.now();
+    try { const rows=await sql<{database_bytes:number|string;active_connections:number;max_connections:number}>`select pg_database_size(current_database())::bigint as database_bytes,(select count(*)::int from pg_stat_activity where datname=current_database()) as active_connections,current_setting('max_connections')::int as max_connections`; database={available:true,sizeBytes:num(rows[0]?.database_bytes),activeConnections:num(rows[0]?.active_connections),maxConnections:num(rows[0]?.max_connections),latencyMs:Date.now()-started}; } catch { database.latencyMs=Date.now()-started; }
+    return {checkedAt:new Date().toISOString(),scope:"application_runtime_host",runtime:{platform:platform(),architecture:arch(),nodeVersion:process.version,cpuCount:cpuInfo.length,loadAverage:loadavg(),uptimeSeconds:Math.floor(hostUptime()),processUptimeSeconds:Math.floor(process.uptime()),processMemory:{rssBytes:memory.rss,heapUsedBytes:memory.heapUsed,heapTotalBytes:memory.heapTotal,externalBytes:memory.external},runtimeMemory},database,storageFilesystem};
+  });
 
 // Phase 10: privacy-preserving admin analytics and bounded direct-message delivery.
 export const adminGetAnalyticsOverview = createServerFn({ method: "GET" })

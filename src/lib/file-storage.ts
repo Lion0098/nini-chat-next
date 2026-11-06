@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, open, rename, rm, stat } from "node:fs/promises";
+import { lstat, mkdir, open, rename, rm, stat, statfs } from "node:fs/promises";
 import { constants, createReadStream } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 export type StorageCategory = "images" | "videos" | "audio" | "documents" | "archives" | "executables" | "other";
@@ -47,3 +47,7 @@ export async function storeFile(input:{buffer:Buffer;category:StorageCategory;ma
 export async function getStoredFilePath(id:string,category:StorageCategory):Promise<string|null>{const path=objectPath(id,category);try{const info=await lstat(path);return info.isFile()&&!info.isSymbolicLink()?path:null;}catch{return null;}}
 export function openStoredFile(path:string){const root=storageRoot(),rel=relative(root,resolve(path));if(!rel||rel.startsWith("..")||isAbsolute(rel))throw new Error("Storage path escaped root");return createReadStream(resolve(path),{flags:(constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)) as unknown as string});}
 export async function deleteStoredFile(id:string,category:StorageCategory):Promise<void>{await rm(objectPath(id,category),{force:true});}
+
+export async function getStorageFilesystemStats(): Promise<{ totalBytes: number; freeBytes: number; usedBytes: number } | null> {
+ try { const fs=await statfs(storageRoot()); const totalBytes=Number(fs.blocks)*Number(fs.bsize); const freeBytes=Number(fs.bavail)*Number(fs.bsize); if(!Number.isFinite(totalBytes)||!Number.isFinite(freeBytes)||totalBytes<=0)return null; return {totalBytes,freeBytes,usedBytes:Math.max(0,totalBytes-freeBytes)}; } catch { return null; }
+}

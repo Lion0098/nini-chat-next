@@ -9,6 +9,7 @@ import { formatChatTime } from "@/lib/format";
 import { AdminReportNotes } from "@/components/admin-report-notes";
 import { AdminInsights } from "@/components/admin-insights";
 import { AdminDashboard } from "@/components/admin-dashboard";
+import { AdminServerMonitoring } from "@/components/admin-server-monitoring";
 import { adminGetUserDetails, adminSetUserActive, adminRequestUserPasswordReset } from "@/server/admin-user-details";
 import {
   adminCreateUser,
@@ -45,11 +46,12 @@ import {
   getMe,
 } from "@/server/api";
 
-type Tab = "android" | "dashboard" | "users" | "groups" | "stories" | "reports" | "appeals" | "audit" | "system" | "ops" | "insights" | "notifications";
+type Tab = "server" | "android" | "dashboard" | "users" | "groups" | "stories" | "reports" | "appeals" | "audit" | "system" | "ops" | "insights" | "notifications";
 type AuditPage = Awaited<ReturnType<typeof adminListAuditEvents>>;
 
-const ADMIN_TABS: Tab[] = ["android", "dashboard", "users", "groups", "stories", "reports", "appeals", "audit", "insights", "system", "ops", "notifications"];
+const ADMIN_TABS: Tab[] = ["server", "android", "dashboard", "users", "groups", "stories", "reports", "appeals", "audit", "insights", "system", "ops", "notifications"];
 const TAB_PERMISSION: Record<Tab, AdminPermission> = {
+  server: "server.monitor.read",
   android: "android.control.read",
   dashboard: "dashboard.read", users: "users.read", groups: "groups.read", stories: "admin.full_access",
   reports: "moderation.read", appeals: "moderation.appeals.read", audit: "audit.read", insights: "audit.read",
@@ -175,6 +177,7 @@ export function AdminScreen() {
 
   const tabs = visibleTabs;
   const label: Record<Tab, string> = {
+    server: locale === "fa" ? "مانیتورینگ سرور" : "Server monitoring",
     android: locale === "fa" ? "کنترل اندروید" : "Android control",
     dashboard: locale === "fa" ? "داشبورد" : "Dashboard",
     users: t("users"), groups: t("groups"), stories: locale === "fa" ? "مدیریت استوری‌ها" : "Stories", reports: locale === "fa" ? "مرکز نظارت" : "Moderation center",
@@ -204,6 +207,7 @@ export function AdminScreen() {
         {["users", "groups", "stories", "audit"].includes(tab) ? (
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("searchUsersPh")} className="mb-4 h-11 w-full rounded-lg bg-panel px-3 outline-none" />
         ) : null}
+        {tab === "server" ? <AdminServerMonitoring locale={locale} /> : null}
         {tab === "dashboard" ? (
           <AdminDashboard locale={locale} stats={dashboard.data} loading={dashboard.isLoading} statsError={dashboard.isError} onNavigate={(nextTab) => setTab(nextTab)} />
         ) : null}
