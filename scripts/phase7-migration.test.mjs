@@ -52,7 +52,7 @@ test("public announcements and operational status are resilient to unavailable s
 test("admin report notes are available in the report moderation UI", async () => {
   const admin = await readFile(new URL("../src/components/admin-screen.tsx", import.meta.url), "utf8");
   const notesComponent = await readFile(new URL("../src/components/admin-report-notes.tsx", import.meta.url), "utf8");
-  assert.match(admin, /<AdminReportNotes reportId={r.id} \/>/);
+  assert.match(admin, /<AdminReportNotes reportId={r.id} canWrite={can\("moderation\.notes\.write"\)} \/>/);
   assert.match(notesComponent, /addModerationReportNote/);
   assert.match(notesComponent, /listModerationReportNotes/);
 });

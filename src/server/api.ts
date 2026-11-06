@@ -2244,7 +2244,7 @@ export const moderatorSetReportStatus = createServerFn({ method: "POST" })
     const sql = await getSql(); await requireAdminPermission(sql, context.userId, "moderation.manage");
     const changed = await sql<{ id: string }>`update reports set status = ${data.status} where id = ${data.id} returning id`;
     if (!changed.length) return err("not_found");
-    await auditAdminEvent(sql, context.userId, "moderation.report_status_changed", null, { reportId: data.id, status: data.status });
+    await auditAdminEvent(sql, context.userId, "report.status_changed", null, { reportId: data.id, status: data.status });
     return ok(true);
   });
 
@@ -2545,7 +2545,7 @@ export const adminSetReport = createServerFn({ method: "POST" })
     await requireAdminPermission(sql, context.userId, "moderation.manage");
     const changed = await sql<{ id: string }>`update reports set status = ${data.status} where id = ${data.id} returning id`;
     if (!changed.length) return err("not_found");
-    await auditAdminEvent(sql, context.userId, "moderation.report_status_changed", null, { reportId: data.id, status: data.status });
+    await auditAdminEvent(sql, context.userId, "report.status_changed", null, { reportId: data.id, status: data.status });
     return ok(true);
   });
 

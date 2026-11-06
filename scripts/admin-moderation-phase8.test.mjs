@@ -17,7 +17,7 @@ test("moderation report reads and status changes enforce separate least-privileg
   assert.match(update, /requireAdminPermission\(sql, context\.userId, "moderation\.manage"\)/);
   assert.match(update, /returning id/);
   assert.match(update, /if \(!changed\.length\) return err\("not_found"\)/);
-  assert.match(update, /moderation\.report_status_changed/);
+  assert.match(update, /report\.status_changed/);
   assert.doesNotMatch(list + update, /requireAdmin\(sql, context\.userId\)/);
 });
 

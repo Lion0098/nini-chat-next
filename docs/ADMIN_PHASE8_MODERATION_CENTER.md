@@ -2,7 +2,7 @@
 
 ## Delivered on `phase10/vps-file-storage`
 - Replaced broad `admin.full_access` checks on report listing and status changes with `moderation.read` and `moderation.manage` respectively.
-- Report status mutations now check the affected row, return `not_found` when it no longer exists, and emit the dedicated `moderation.report_status_changed` audit event.
+- Report status mutations now check the affected row, return `not_found` when it no longer exists, and retain the established `report.status_changed` audit event for backward compatibility.
 - Added an authenticated effective-access endpoint so the admin console can build navigation from the caller's assigned RBAC role and permission catalog. Server-side guards remain authoritative.
 - The console hides tabs and mutation controls outside the caller's permissions. Moderators can review reports and appeals; read-only roles do not receive write controls.
 - Moderation notes remain internal, are loaded only with `moderation.notes.read`, and the editor is shown only with `moderation.notes.write`.
