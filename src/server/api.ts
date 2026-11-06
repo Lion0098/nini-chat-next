@@ -3032,33 +3032,82 @@ export const adminGetOperationalStatus = createServerFn({ method: "GET" })
 
 // Phase 10: privacy-preserving admin analytics and bounded direct-message delivery.
 export const adminGetAnalyticsOverview = createServerFn({ method: "GET" })
+  .validator((input: unknown) => {
+    const value = Number(rec(input ?? {}).days ?? 30);
+    if (![7, 30, 90].includes(value)) throw new Error("bad_input");
+    return { days: value as 7 | 30 | 90 };
+  })
   .middleware([authMiddleware])
-  .handler(async ({ context }) => {
+  .handler(async ({ context, data }) => {
     const sql = await getSql();
     const { role } = await requireAuditReader(sql, context.userId);
-    const rows = await sql<any>`
+    const days = data.days;
+    const totals = await sql<any>`
       select
         (select count(*)::int from "user") as users,
         (select count(*)::int from messages where deleted_at is null) as messages,
         (select count(*)::int from statuses) as stories,
         (select count(*)::int from profiles where last_seen_at >= now() - interval '30 days') as active_30d,
         (select count(*)::int from profiles where last_seen_at is null or last_seen_at < now() - interval '30 days') as inactive_30d,
-        (select coalesce(round(count(*)::numeric / nullif((select count(*) from "user"),0),2),0) from messages where deleted_at is null) as messages_per_user
+        (select coalesce(round(count(*)::numeric / nullif((select count(*) from "user"),0),2),0) from messages where deleted_at is null) as messages_per_user,
+        (select count(*)::int from messages where deleted_at is null and created_at >= current_date - (${days} - 1) * interval '1 day') as period_messages,
+        (select count(*)::int from messages where deleted_at is null and created_at >= current_date - (2 * ${days} - 1) * interval '1 day' and created_at < current_date - (${days} - 1) * interval '1 day') as previous_messages,
+        (select count(*)::int from statuses where created_at >= current_date - (${days} - 1) * interval '1 day') as period_stories,
+        (select count(*)::int from statuses where created_at >= current_date - (2 * ${days} - 1) * interval '1 day' and created_at < current_date - (${days} - 1) * interval '1 day') as previous_stories,
+        (select count(*)::int from profiles where created_at >= current_date - (${days} - 1) * interval '1 day') as period_signups,
+        (select count(*)::int from profiles where created_at >= current_date - (2 * ${days} - 1) * interval '1 day' and created_at < current_date - (${days} - 1) * interval '1 day') as previous_signups,
+        (select count(distinct sender_id)::int from messages where deleted_at is null and created_at >= current_date - (${days} - 1) * interval '1 day') as engaged_users,
+        (select count(distinct sender_id)::int from messages where deleted_at is null and created_at >= current_date - (2 * ${days} - 1) * interval '1 day' and created_at < current_date - (${days} - 1) * interval '1 day') as previous_engaged_users
     `;
     const daily = await sql<any>`
-      select d.day::date as day,
-        (select count(*)::int from messages m where m.created_at >= d.day and m.created_at < d.day + interval '1 day' and m.deleted_at is null) as messages,
-        (select count(*)::int from statuses s where s.created_at >= d.day and s.created_at < d.day + interval '1 day') as stories,
-        (select count(*)::int from profiles p where p.created_at >= d.day and p.created_at < d.day + interval '1 day') as signups
-      from generate_series(current_date - interval '29 days', current_date, interval '1 day') d(day)
-      order by d.day
+      with days as (
+        select generate_series(current_date - (${days} - 1) * interval '1 day', current_date, interval '1 day')::date as day
+      ), message_stats as (
+        select created_at::date as day, count(*)::int as messages, count(distinct sender_id)::int as active_users
+        from messages
+        where created_at >= current_date - (${days} - 1) * interval '1 day' and deleted_at is null
+        group by created_at::date
+      ), story_stats as (
+        select created_at::date as day, count(*)::int as stories from statuses
+        where created_at >= current_date - (${days} - 1) * interval '1 day' group by created_at::date
+      ), signup_stats as (
+        select created_at::date as day, count(*)::int as signups from profiles
+        where created_at >= current_date - (${days} - 1) * interval '1 day' group by created_at::date
+      )
+      select days.day,
+        coalesce(message_stats.messages,0)::int as messages,
+        coalesce(message_stats.active_users,0)::int as active_users,
+        coalesce(story_stats.stories,0)::int as stories,
+        coalesce(signup_stats.signups,0)::int as signups
+      from days left join message_stats using(day) left join story_stats using(day) left join signup_stats using(day)
+      order by days.day
     `;
-    const peak = await sql<any>`
+    const hourlyRows = await sql<any>`
       select extract(hour from created_at)::int as hour, count(*)::int as total
-      from messages where created_at >= now() - interval '30 days' and deleted_at is null
-      group by 1 order by total desc limit 1
+      from messages where created_at >= current_date - (${days} - 1) * interval '1 day' and deleted_at is null
+      group by 1 order by 1
     `;
-    return { ...rows[0], viewerRole: role, daily: daily.map((r:any)=>({day:iso(r.day),messages:num(r.messages),stories:num(r.stories),signups:num(r.signups)})), peakHour: peak[0]?.hour ?? null };
+    const peak = hourlyRows.reduce((best: any, row: any) => !best || num(row.total) > num(best.total) ? row : best, null);
+    const hourly = Array.from({ length: 24 }, (_, hour) => ({ hour, messages: num(hourlyRows.find((row: any) => num(row.hour) === hour)?.total) }));
+    const change = (current: unknown, previous: unknown) => {
+      const a = num(current), b = num(previous);
+      return b === 0 ? null : Math.round(((a - b) / b) * 1000) / 10;
+    };
+    const summary = totals[0] ?? {};
+    return {
+      ...summary,
+      viewerRole: role,
+      rangeDays: days,
+      comparisons: {
+        messages: change(summary.period_messages, summary.previous_messages),
+        stories: change(summary.period_stories, summary.previous_stories),
+        signups: change(summary.period_signups, summary.previous_signups),
+        engagedUsers: change(summary.engaged_users, summary.previous_engaged_users),
+      },
+      daily: daily.map((r: any) => ({ day: iso(r.day), messages: num(r.messages), activeUsers: num(r.active_users), stories: num(r.stories), signups: num(r.signups) })),
+      hourly,
+      peakHour: peak ? num(peak.hour) : null,
+    };
   });
 
 export const adminGetUserAnalytics = createServerFn({ method: "GET" })
