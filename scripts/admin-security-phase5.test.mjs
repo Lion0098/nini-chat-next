@@ -21,8 +21,9 @@ test("Phase 5 migration defines scoped admin roles and preserves existing admin 
 test("audit log is append-only and does not store credentials by schema", () => {
   assert.match(migration, /CREATE TABLE IF NOT EXISTS admin_audit_events/);
   assert.match(migration, /BEFORE UPDATE OR DELETE ON admin_audit_events/);
-  assert.ok(api.includes("Object.fromEntries(Object.entries(details).filter"));
-  assert.match(api, /password\|token\|secret\|otp\|api\.\?key\|credential/);  assert.match(api, /admin_audit_events \(actor_user_id, action, target_user_id, details\)/);
+  assert.match(api, /function sanitizeAuditDetails[\s\S]*?redacted/);
+  assert.ok(api.includes("private.?key") && api.includes("authorization") && api.includes("cookie"));
+  assert.match(api, /admin_audit_events \(actor_user_id, action, target_user_id, details\)/);
 });
 
 test("dashboard, audit reader and role assignment APIs require backend authorization", () => {
@@ -101,3 +102,26 @@ test("moderator and support endpoints enforce named least-privilege permissions"
 
 
 
+
+
+test("audit history supports validated filters, stable keyset pagination, and recursive redaction", () => {
+  assert.match(api, /fromDate = clean\(o\.fromDate, 10\)/);
+  assert.match(api, /toDate = clean\(o\.toDate, 10\)/);
+  assert.match(api, /bad_date_range/);
+  assert.match(api, /bad_cursor/);
+  assert.match(api, /order by e\.created_at desc, e\.id desc limit \$\{data\.limit \+ 1\}/);
+  assert.match(api, /nextCursor/);
+  assert.match(api, /sanitizeAuditDetails\(r\.details\)/);
+  assert.match(api, /authorization\|cookie\|session/);
+});
+
+test("audit console uses infinite pages and exposes action/date filters and request states", () => {
+  assert.match(adminUi, /useInfiniteQuery/);
+  assert.match(adminUi, /getNextPageParam/);
+  assert.match(adminUi, /auditAction/);
+  assert.match(adminUi, /auditFromDate/);
+  assert.match(adminUi, /auditToDate/);
+  assert.match(adminUi, /audit\.fetchNextPage\(\)/);
+  assert.match(adminUi, /audit\.isError/);
+  assert.match(adminUi, /audit\.isFetchingNextPage/);
+});

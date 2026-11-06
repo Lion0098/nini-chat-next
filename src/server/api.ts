@@ -346,8 +346,8 @@ function invitationHash(token: string): string {
 }
 
 async function auditAdminEvent(sql: Sql, actorId: string, action: string, targetUserId: string | null = null, details: Record<string, unknown> = {}) {
-  // Keep metadata allowlisted and never persist credentials, tokens, or OTP material.
-  const safe = Object.fromEntries(Object.entries(details).filter(([key]) => !/(password|token|secret|otp|api.?key|credential)/i.test(key)));
+  // Recursively redact sensitive metadata before it reaches persistent storage.
+  const safe = sanitizeAuditDetails(details);
   await sql`insert into admin_audit_events (actor_user_id, action, target_user_id, details) values (${actorId}, ${action}, ${targetUserId}, ${JSON.stringify(safe)}::jsonb)`;
 }
 
@@ -1863,27 +1863,70 @@ export const adminGetDashboard = createServerFn({ method: "GET" })
     return { ...rows[0], viewerRole: role, viewerPermissions: permissionsForRole(role) };
   });
 
+function sanitizeAuditDetails(value: unknown, depth = 0): unknown {
+  if (depth > 4) return "[truncated]";
+  if (value === null || typeof value === "boolean" || typeof value === "number") return value;
+  if (typeof value === "string") return value.length > 500 ? `${value.slice(0, 500)}…` : value;
+  if (Array.isArray(value)) return value.slice(0, 30).map((item) => sanitizeAuditDetails(item, depth + 1));
+  if (typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 50).map(([key, item]) => [
+      key,
+      /(password|passphrase|token|secret|otp|api.?key|credential|authorization|cookie|session|private.?key)/i.test(key)
+        ? "[redacted]"
+        : sanitizeAuditDetails(item, depth + 1),
+    ]));
+  }
+  return String(value).slice(0, 200);
+}
+
 export const adminListAuditEvents = createServerFn({ method: "GET" })
   .validator((input: unknown) => {
     const o = rec(input ?? {});
-    return { q: clean(o.q, 80), limit: Math.max(1, Math.min(100, Number(o.limit) || 50)) };
+    const q = clean(o.q, 80);
+    const action = clean(o.action, 120);
+    const fromDate = clean(o.fromDate, 10);
+    const toDate = clean(o.toDate, 10);
+    const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+    const validDate = (value: string) => !value || (datePattern.test(value) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value);
+    if (!validDate(fromDate) || !validDate(toDate)) throw new Error("bad_date_filter");
+    if (fromDate && toDate && fromDate > toDate) throw new Error("bad_date_range");
+    const limit = Math.max(1, Math.min(100, Number(o.limit) || 50));
+    let cursor: { createdAt: string; id: string } | null = null;
+    if (o.cursor) {
+      try {
+        const decoded = JSON.parse(Buffer.from(clean(o.cursor, 500), "base64url").toString("utf8"));
+        if (typeof decoded.createdAt !== "string" || !Number.isFinite(Date.parse(decoded.createdAt)) || !/^\d+$/.test(String(decoded.id))) throw new Error("bad_cursor");
+        cursor = { createdAt: new Date(decoded.createdAt).toISOString(), id: String(decoded.id) };
+      } catch { throw new Error("bad_cursor"); }
+    }
+    return { q, action, fromDate, toDate, limit, cursor };
   })
   .middleware([authMiddleware])
   .handler(async ({ context, data }) => {
     const sql = await getSql();
     const { role } = await requireAuditReader(sql, context.userId);
     const q = `%${data.q.replace(/[%_]/g, "").toLowerCase()}%`;
+    const cursorCreatedAt = data.cursor?.createdAt ?? null;
+    const cursorId = data.cursor?.id ?? null;
     const rows = await sql<{ id: string; actor_user_id: string; actor_name: string | null; action: string; target_user_id: string | null; target_name: string | null; details: unknown; created_at: unknown }>`
       select e.id, e.actor_user_id, a.display_name as actor_name, e.action, e.target_user_id,
              t.display_name as target_name, e.details, e.created_at
       from admin_audit_events e
       left join profiles a on a.user_id = e.actor_user_id
       left join profiles t on t.user_id = e.target_user_id
-      where ${data.q} = '' or lower(e.action) like ${q} or lower(coalesce(a.display_name, '')) like ${q}
-         or lower(coalesce(t.display_name, '')) like ${q} or e.target_user_id like ${q}
-      order by e.created_at desc, e.id desc limit ${data.limit}
+      where (${data.q} = '' or lower(e.action) like ${q} or lower(coalesce(a.display_name, '')) like ${q}
+         or lower(coalesce(t.display_name, '')) like ${q} or e.target_user_id like ${q})
+        and (${data.action} = '' or e.action = ${data.action})
+        and (${data.fromDate} = '' or e.created_at >= ${data.fromDate}::date)
+        and (${data.toDate} = '' or e.created_at < (${data.toDate}::date + interval '1 day'))
+        and (${cursorCreatedAt}::timestamptz is null or (e.created_at, e.id) < (${cursorCreatedAt}::timestamptz, ${cursorId}::bigint))
+      order by e.created_at desc, e.id desc limit ${data.limit + 1}
     `;
-    return ok({ viewerRole: role, events: rows.map((r) => ({ id: r.id, actorUserId: r.actor_user_id, actorName: r.actor_name || r.actor_user_id, action: r.action, targetUserId: r.target_user_id, targetName: r.target_name, details: r.details == null ? null : JSON.parse(JSON.stringify(r.details)), createdAt: iso(r.created_at) })) });
+    const hasMore = rows.length > data.limit;
+    const page = rows.slice(0, data.limit);
+    const last = page[page.length - 1];
+    const nextCursor = hasMore && last ? Buffer.from(JSON.stringify({ createdAt: iso(last.created_at), id: String(last.id) })).toString("base64url") : null;
+    return ok({ viewerRole: role, events: page.map((r) => ({ id: r.id, actorUserId: r.actor_user_id, actorName: r.actor_name || r.actor_user_id, action: r.action, targetUserId: r.target_user_id, targetName: r.target_name, details: r.details == null ? null : sanitizeAuditDetails(r.details), createdAt: iso(r.created_at) })), hasMore, nextCursor });
   });
 
 export const adminSetAdminRole = createServerFn({ method: "POST" })

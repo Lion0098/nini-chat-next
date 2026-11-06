@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ArrowRight } from "lucide-react";
 import { usePrefs } from "@/lib/prefs";
@@ -51,9 +51,14 @@ export function AdminScreen() {
     queryFn: () => adminGetDashboard(),
     enabled: meQ.data?.role === "admin",
   });
-  const audit = useQuery({
-    queryKey: ["admin-audit", q],
-    queryFn: () => adminListAuditEvents({ data: { q, limit: 100 } }),
+  const [auditAction, setAuditAction] = useState("");
+  const [auditFromDate, setAuditFromDate] = useState("");
+  const [auditToDate, setAuditToDate] = useState("");
+  const audit = useInfiniteQuery({
+    queryKey: ["admin-audit", q, auditAction, auditFromDate, auditToDate],
+    initialPageParam: "",
+    queryFn: ({ pageParam }) => adminListAuditEvents({ data: { q, action: auditAction, fromDate: auditFromDate, toDate: auditToDate, limit: 50, cursor: pageParam } }),
+    getNextPageParam: (lastPage) => lastPage.ok ? (lastPage.data.nextCursor ?? undefined) : undefined,
     enabled: meQ.data?.role === "admin" && tab === "audit",
   });
   const users = useQuery({
@@ -148,16 +153,29 @@ export function AdminScreen() {
         ) : null}
         {tab === "insights" ? <AdminInsights locale={locale} /> : null}
         {tab === "audit" ? (
-          <section className="space-y-2">
-            <p className="text-xs text-muted">{locale === "fa" ? "این رویدادها فقط خواندنی هستند؛ اطلاعات محرمانه در جزئیات ثبت نمی‌شوند." : "Read-only events. Secret values are not included in event metadata."}</p>
-            {(audit.data?.ok ? audit.data.data.events : []).length === 0 ? <p className="rounded-xl bg-panel p-4 text-sm text-muted">{locale === "fa" ? "رویدادی پیدا نشد." : "No events found."}</p> : null}
-            {(audit.data?.ok ? audit.data.data.events : []).map((event) => (
-              <article key={event.id} className="rounded-xl bg-panel p-3 text-sm">
-                <div className="flex flex-wrap justify-between gap-2"><strong>{event.action}</strong><time className="text-muted">{formatChatTime(event.createdAt, locale, t)}</time></div>
-                <p className="mt-1 text-muted">{locale === "fa" ? "عامل:" : "Actor:"} {event.actorName} · {locale === "fa" ? "هدف:" : "Target:"} {event.targetName || event.targetUserId || "—"}</p>
-                {event.details ? <pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-xs text-muted">{JSON.stringify(event.details, null, 2)}</pre> : null}
-              </article>
-            ))}
+          <section className="space-y-3">
+            <p className="text-xs text-muted">{locale === "fa" ? "گزارش‌ها فقط خواندنی‌اند؛ اطلاعات محرمانه در جزئیات پوشانده می‌شوند." : "Read-only history. Sensitive metadata is redacted before display."}</p>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <input aria-label={locale === "fa" ? "نوع رویداد" : "Event action"} value={auditAction} onChange={(event) => setAuditAction(event.target.value)} placeholder={locale === "fa" ? "نوع رویداد؛ مثال user.updated" : "Action, e.g. user.updated"} className="h-10 min-w-0 rounded-lg bg-panel px-3 text-sm outline-none" />
+              <label className="grid gap-1 text-xs text-muted">{locale === "fa" ? "از تاریخ" : "From date"}<input type="date" value={auditFromDate} max={auditToDate || undefined} onChange={(event) => setAuditFromDate(event.target.value)} className="h-10 rounded-lg bg-panel px-3 text-sm text-ink" /></label>
+              <label className="grid gap-1 text-xs text-muted">{locale === "fa" ? "تا تاریخ" : "To date"}<input type="date" value={auditToDate} min={auditFromDate || undefined} onChange={(event) => setAuditToDate(event.target.value)} className="h-10 rounded-lg bg-panel px-3 text-sm text-ink" /></label>
+            </div>
+            {audit.isLoading ? <p className="rounded-xl bg-panel p-4 text-sm text-muted">{locale === "fa" ? "در حال بارگذاری گزارش‌ها…" : "Loading audit events…"}</p> : null}
+            {audit.isError ? <div className="rounded-xl bg-panel p-4 text-sm" role="alert">{locale === "fa" ? "بارگذاری گزارش‌ها ناموفق بود." : "Could not load audit events."}<button type="button" onClick={() => audit.refetch()} className="ms-3 underline">{locale === "fa" ? "تلاش مجدد" : "Retry"}</button></div> : null}
+            {(() => {
+              const events = audit.data?.pages.flatMap((page) => page.ok ? page.data.events : []) ?? [];
+              return <>
+                {events.length === 0 && !audit.isLoading ? <p className="rounded-xl bg-panel p-4 text-sm text-muted">{locale === "fa" ? "رویدادی پیدا نشد." : "No events found."}</p> : null}
+                {events.map((event) => (
+                  <article key={event.id} className="rounded-xl bg-panel p-3 text-sm">
+                    <div className="flex flex-wrap justify-between gap-2"><strong>{event.action}</strong><time className="text-muted">{formatChatTime(event.createdAt, locale, t)}</time></div>
+                    <p className="mt-1 break-words text-muted">{locale === "fa" ? "عامل:" : "Actor:"} {event.actorName} · {locale === "fa" ? "هدف:" : "Target:"} {event.targetName || event.targetUserId || "—"}</p>
+                    {event.details ? <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words text-xs text-muted">{JSON.stringify(event.details, null, 2)}</pre> : null}
+                  </article>
+                ))}
+                {audit.hasNextPage ? <button type="button" disabled={audit.isFetchingNextPage} onClick={() => audit.fetchNextPage()} className="h-10 w-full rounded-lg bg-panel text-sm disabled:opacity-50">{audit.isFetchingNextPage ? (locale === "fa" ? "در حال دریافت…" : "Loading…") : (locale === "fa" ? "نمایش رویدادهای بیشتر" : "Load more events")}</button> : null}
+              </>;
+            })()}
           </section>
         ) : null}
         {tab === "users" ? (
