@@ -5,7 +5,7 @@ import { usePrefs } from "@/lib/prefs";
 import { formatChatTime } from "@/lib/format";
 import { addModerationReportNote, listModerationReportNotes } from "@/server/api";
 
-export function AdminReportNotes({ reportId }: { reportId: string }) {
+export function AdminReportNotes({ reportId, canWrite }: { reportId: string; canWrite: boolean }) {
   const { locale, t } = usePrefs();
   const qc = useQueryClient();
   const [draft, setDraft] = useState("");
@@ -24,6 +24,8 @@ export function AdminReportNotes({ reportId }: { reportId: string }) {
         </div>
       ))}
       {notes.isLoading ? <p className="text-xs text-muted">{fa ? "در حال بارگذاری…" : "Loading…"}</p> : null}
+      {notes.isError ? <p role="alert" className="text-xs">{fa ? "دریافت یادداشت‌ها ناموفق بود." : "Could not load notes."} <button type="button" className="underline" onClick={() => void notes.refetch()}>{fa ? "تلاش مجدد" : "Retry"}</button></p> : null}
+      {canWrite ? <>
       <textarea value={draft} onChange={(e) => setDraft(e.target.value)} maxLength={2000} className="min-h-16 w-full rounded-lg bg-header p-2" placeholder={fa ? "یادداشت داخلی؛ برای کاربر نمایش داده نمی‌شود" : "Internal note; not visible to the reported user"} />
       <button type="button" disabled={!draft.trim() || notes.isFetching} className="rounded-lg bg-green px-3 py-2 text-sm text-on disabled:opacity-50" onClick={() => {
         void addModerationReportNote({ data: { reportId, note: draft.trim() } }).then((res) => {
@@ -33,6 +35,7 @@ export function AdminReportNotes({ reportId }: { reportId: string }) {
           void qc.invalidateQueries({ queryKey: ["admin-report-notes", reportId] });
         }).catch(() => toast.error(fa ? "خطا در ثبت یادداشت" : "Failed to save note"));
       }}>{fa ? "ثبت یادداشت" : "Add note"}</button>
+      </> : null}
     </div>
   );
 }

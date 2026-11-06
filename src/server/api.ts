@@ -341,6 +341,16 @@ async function requireAuditReader(sql: Sql, userId: string) {
   return requireAdminPermission(sql, userId, "audit.read");
 }
 
+export const adminGetMyAdminAccess = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const sql = await getSql();
+    const profile = await ensure(sql, context.userId);
+    const role = await adminRoleOf(sql, context.userId);
+    if (profile.role !== "admin" || !role) throw new Error("forbidden");
+    return { role, permissions: [...permissionsForRole(role)] };
+  });
+
 function invitationHash(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
@@ -2481,7 +2491,7 @@ export const adminListReports = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context, data }): Promise<AdminReport[]> => {
     const sql = await getSql();
-    await requireAdmin(sql, context.userId);
+    await requireAdminPermission(sql, context.userId, "moderation.read");
     const status = ["open", "reviewed", "dismissed"].includes(data.status) ? data.status : "";
     const rows = await sql<{
       id: string;
@@ -2532,9 +2542,10 @@ export const adminSetReport = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context, data }) => {
     const sql = await getSql();
-    await requireAdmin(sql, context.userId);
-    await sql`update reports set status = ${data.status} where id = ${data.id}`;
-    await auditAdminEvent(sql, context.userId, "report.status_changed", null, { reportId: data.id, status: data.status });
+    await requireAdminPermission(sql, context.userId, "moderation.manage");
+    const changed = await sql<{ id: string }>`update reports set status = ${data.status} where id = ${data.id} returning id`;
+    if (!changed.length) return err("not_found");
+    await auditAdminEvent(sql, context.userId, "moderation.report_status_changed", null, { reportId: data.id, status: data.status });
     return ok(true);
   });
 
@@ -3011,7 +3022,7 @@ export const adminListAnnouncements = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     const sql = await getSql();
-    await requireAdmin(sql, context.userId);
+    await requireAdminPermission(sql, context.userId, "announcements.manage");
     const rows = await sql<{ id: number; title: string; body: string; active: boolean; created_at: unknown }>`
       select id, title, body, active, created_at from system_announcements
       order by created_at desc limit 100
@@ -3030,7 +3041,7 @@ export const adminCreateAnnouncement = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context, data }) => {
     const sql = await getSql();
-    await requireAdmin(sql, context.userId);
+    await requireAdminPermission(sql, context.userId, "announcements.manage");
     const rows = await sql<{ id: number }>`
       insert into system_announcements(title, body, active, created_by)
       values (${data.title}, ${data.body}, ${data.active}, ${context.userId}) returning id
@@ -3049,9 +3060,50 @@ export const adminSetAnnouncementActive = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context, data }) => {
     const sql = await getSql();
-    await requireAdmin(sql, context.userId);
-    await sql`update system_announcements set active = ${data.active}, updated_at = now() where id = ${data.id}`;
+    await requireAdminPermission(sql, context.userId, "announcements.manage");
+    const changed = await sql<{ id: number }>`update system_announcements set active = ${data.active}, updated_at = now() where id = ${data.id} returning id`;
+    if (!changed.length) return err("not_found");
     await auditAdminEvent(sql, context.userId, "system.announcement_status_changed", null, { announcementId: data.id, active: data.active });
+    return ok(true);
+  });
+
+export const adminUpdateAnnouncement = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input);
+    const id = Number(o.id);
+    const title = clean(o.title, 160);
+    const body = clean(o.body, 4000);
+    if (!Number.isSafeInteger(id) || id < 1 || !title || !body) throw new Error("bad_input");
+    return { id, title, body };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    await requireAdminPermission(sql, context.userId, "announcements.manage");
+    const changed = await sql<{ id: number }>`
+      update system_announcements set title = ${data.title}, body = ${data.body}, updated_at = now()
+      where id = ${data.id} returning id
+    `;
+    if (!changed.length) return err("not_found");
+    await auditAdminEvent(sql, context.userId, "system.announcement_updated", null, { announcementId: data.id });
+    return ok(true);
+  });
+
+export const adminDeleteAnnouncement = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const id = Number(rec(input).id);
+    if (!Number.isSafeInteger(id) || id < 1) throw new Error("bad_input");
+    return { id };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    await requireAdminPermission(sql, context.userId, "announcements.manage");
+    const removed = await sql<{ id: number; title: string }>`
+      delete from system_announcements where id = ${data.id} returning id, title
+    `;
+    if (!removed.length) return err("not_found");
+    await auditAdminEvent(sql, context.userId, "system.announcement_deleted", null, { announcementId: data.id });
     return ok(true);
   });
 
