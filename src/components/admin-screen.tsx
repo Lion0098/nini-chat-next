@@ -4,6 +4,7 @@ import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-quer
 import { toast } from "sonner";
 import { ArrowRight } from "lucide-react";
 import { usePrefs } from "@/lib/prefs";
+import type { AdminPermission } from "@/lib/auth/admin-permissions";
 import { formatChatTime } from "@/lib/format";
 import { AdminReportNotes } from "@/components/admin-report-notes";
 import { AdminInsights } from "@/components/admin-insights";
@@ -46,7 +47,7 @@ type Tab = "dashboard" | "users" | "groups" | "stories" | "reports" | "appeals" 
 type AuditPage = Awaited<ReturnType<typeof adminListAuditEvents>>;
 
 const ADMIN_TABS: Tab[] = ["dashboard", "users", "groups", "stories", "reports", "appeals", "audit", "insights", "system", "ops", "notifications"];
-const TAB_PERMISSION: Record<Tab, string> = {
+const TAB_PERMISSION: Record<Tab, AdminPermission> = {
   dashboard: "dashboard.read", users: "users.read", groups: "groups.read", stories: "admin.full_access",
   reports: "moderation.read", appeals: "moderation.appeals.read", audit: "audit.read", insights: "audit.read",
   system: "system.manage", ops: "operations.read", notifications: "announcements.manage",
@@ -57,7 +58,7 @@ export function AdminScreen() {
   const qc = useQueryClient();
   const meQ = useQuery({ queryKey: ["me"], queryFn: () => getMe() });
   const access = useQuery({ queryKey: ["admin-my-access"], queryFn: () => adminGetMyAdminAccess(), enabled: meQ.data?.role === "admin" });
-  const can = (permission: string) => access.data?.permissions.includes(permission) ?? false;
+  const can = (permission: AdminPermission) => access.data?.permissions.includes(permission) ?? false;
   const [tab, setTab] = useState<Tab>("dashboard");
   const [q, setQ] = useState("");
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
