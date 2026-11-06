@@ -575,18 +575,32 @@ export function AdminScreen() {
             </section>
           </section>
         ) : null}
-        {tab === "system" && settings.data ? (
-          <SettingsForm
-            initial={settings.data}
-            onSave={async (value) => {
-              const res = await adminSaveSettings({ data: value });
-              if (!res.ok) toast.error(err(res.error));
-              else {
-                toast.success(t("saved"));
-                void qc.invalidateQueries({ queryKey: ["admin-settings"] });
-              }
-            }}
-          />
+        {tab === "system" ? (
+          settings.isLoading ? (
+            <p className="rounded-xl bg-panel p-4 text-sm text-muted">{locale === "fa" ? "در حال دریافت تنظیمات سامانه…" : "Loading system settings…"}</p>
+          ) : settings.isError ? (
+            <div className="rounded-xl bg-panel p-4 text-sm" role="alert">
+              <p>{locale === "fa" ? "دریافت تنظیمات سامانه ناموفق بود." : "Could not load system settings."}</p>
+              <button type="button" className="mt-2 underline" onClick={() => void settings.refetch()}>{locale === "fa" ? "تلاش مجدد" : "Retry"}</button>
+            </div>
+          ) : settings.data ? (
+            <SettingsForm
+              initial={settings.data}
+              onSave={async (value) => {
+                try {
+                  const res = await adminSaveSettings({ data: value });
+                  if (!res.ok) toast.error(err(res.error));
+                  else {
+                    toast.success(t("saved"));
+                    void qc.invalidateQueries({ queryKey: ["admin-settings"] });
+                    void qc.invalidateQueries({ queryKey: ["admin-audit"] });
+                  }
+                } catch {
+                  toast.error(locale === "fa" ? "ذخیره تنظیمات انجام نشد؛ اتصال و دسترسی را بررسی کن." : "Could not save settings. Check your connection and permissions.");
+                }
+              }}
+            />
+          ) : null
         ) : null}
       </div>
     </div>
@@ -633,10 +647,36 @@ function SettingsForm({
   initial,
   onSave,
 }: {
-  initial: { allowSignups: boolean; allowEmailSignup: boolean; allowPhoneSignup: boolean; maxUploadBytes: number; rateLimitLoginMax: number; rateLimitSignupMax: number; rateLimitOtpMax: number; rateLimitWindowSeconds: number; requireEmailVerification: boolean; requirePhoneVerification: boolean; maintenance: string; fileStorageEnabled: boolean; fileUploadDefaultMaxBytes: number; fileUploadDailyQuotaBytes: number; fileUploadWeeklyQuotaBytes: number; fileUploadMonthlyQuotaBytes: number; fileUploadQuotaEnabled: boolean };
-  onSave: (v: { allowSignups: boolean; allowEmailSignup: boolean; allowPhoneSignup: boolean; maxUploadBytes: number; rateLimitLoginMax: number; rateLimitSignupMax: number; rateLimitOtpMax: number; rateLimitWindowSeconds: number; requireEmailVerification: boolean; requirePhoneVerification: boolean; maintenance: string; fileUploadDefaultMaxBytes: number; fileUploadDailyQuotaBytes: number; fileUploadWeeklyQuotaBytes: number; fileUploadMonthlyQuotaBytes: number; fileUploadQuotaEnabled: boolean }) => Promise<void>;
+  initial: {
+    allowSignups: boolean;
+    allowEmailSignup: boolean;
+    allowPhoneSignup: boolean;
+    maxUploadBytes: number;
+    rateLimitLoginMax: number;
+    rateLimitSignupMax: number;
+    rateLimitOtpMax: number;
+    rateLimitWindowSeconds: number;
+    requireEmailVerification: boolean;
+    requirePhoneVerification: boolean;
+    maintenance: string;
+    updatedAt: string | null;
+  };
+  onSave: (value: {
+    allowSignups: boolean;
+    allowEmailSignup: boolean;
+    allowPhoneSignup: boolean;
+    maxUploadBytes: number;
+    rateLimitLoginMax: number;
+    rateLimitSignupMax: number;
+    rateLimitOtpMax: number;
+    rateLimitWindowSeconds: number;
+    requireEmailVerification: boolean;
+    requirePhoneVerification: boolean;
+    maintenance: string;
+  }) => Promise<void>;
 }) {
   const { t, locale } = usePrefs();
+  const fa = locale === "fa";
   const [allowSignups, setAllow] = useState(initial.allowSignups);
   const [allowEmailSignup, setAllowEmail] = useState(initial.allowEmailSignup);
   const [allowPhoneSignup, setAllowPhone] = useState(initial.allowPhoneSignup);
@@ -648,68 +688,122 @@ function SettingsForm({
   const [requireEmailVerification, setRequireEmail] = useState(initial.requireEmailVerification);
   const [requirePhoneVerification, setRequirePhone] = useState(initial.requirePhoneVerification);
   const [maintenance, setNote] = useState(initial.maintenance);
-  const [fileUploadDefaultMaxBytes, setFileMax] = useState(String(initial.fileUploadDefaultMaxBytes));
-  const [fileUploadDailyQuotaBytes, setDailyQuota] = useState(String(initial.fileUploadDailyQuotaBytes));
-  const [fileUploadWeeklyQuotaBytes, setWeeklyQuota] = useState(String(initial.fileUploadWeeklyQuotaBytes));
-  const [fileUploadMonthlyQuotaBytes, setMonthlyQuota] = useState(String(initial.fileUploadMonthlyQuotaBytes));
-  const [fileUploadQuotaEnabled, setQuotaEnabled] = useState(initial.fileUploadQuotaEnabled);
+  const [saving, setSaving] = useState(false);
+  const field = "mt-1 h-11 w-full rounded-lg bg-header px-3 text-sm outline-none disabled:opacity-60";
+
+  useEffect(() => {
+    setAllow(initial.allowSignups);
+    setAllowEmail(initial.allowEmailSignup);
+    setAllowPhone(initial.allowPhoneSignup);
+    setMax(String(initial.maxUploadBytes));
+    setRateLogin(String(initial.rateLimitLoginMax));
+    setRateSignup(String(initial.rateLimitSignupMax));
+    setRateOtp(String(initial.rateLimitOtpMax));
+    setRateWindow(String(initial.rateLimitWindowSeconds));
+    setRequireEmail(initial.requireEmailVerification);
+    setRequirePhone(initial.requirePhoneVerification);
+    setNote(initial.maintenance);
+  }, [initial]);
+
   return (
     <form
-      className="max-w-lg space-y-3 rounded-xl bg-panel p-4"
-      onSubmit={(e) => {
-        e.preventDefault();
-        void onSave({ allowSignups, allowEmailSignup, allowPhoneSignup, maxUploadBytes: Number(maxUploadBytes), rateLimitLoginMax: Number(rateLimitLoginMax), rateLimitSignupMax: Number(rateLimitSignupMax), rateLimitOtpMax: Number(rateLimitOtpMax), rateLimitWindowSeconds: Number(rateLimitWindowSeconds), requireEmailVerification, requirePhoneVerification, maintenance, fileUploadDefaultMaxBytes: Number(fileUploadDefaultMaxBytes), fileUploadDailyQuotaBytes: Number(fileUploadDailyQuotaBytes), fileUploadWeeklyQuotaBytes: Number(fileUploadWeeklyQuotaBytes), fileUploadMonthlyQuotaBytes: Number(fileUploadMonthlyQuotaBytes), fileUploadQuotaEnabled });
+      className="max-w-2xl space-y-4 rounded-xl bg-panel p-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (saving) return;
+        const highImpact =
+          (initial.allowSignups && !allowSignups) ||
+          (!initial.requireEmailVerification && requireEmailVerification) ||
+          (!initial.requirePhoneVerification && requirePhoneVerification);
+        if (highImpact && !window.confirm(
+          fa
+            ? "این تغییر ممکن است ثبت‌نام یا دسترسی کاربران تأییدنشده را محدود کند. تنظیمات ذخیره شود؟"
+            : "This change may pause registration or restrict unverified users on their next request. Save these settings?",
+        )) return;
+        setSaving(true);
+        void onSave({
+          allowSignups,
+          allowEmailSignup,
+          allowPhoneSignup,
+          maxUploadBytes: Number(maxUploadBytes),
+          rateLimitLoginMax: Number(rateLimitLoginMax),
+          rateLimitSignupMax: Number(rateLimitSignupMax),
+          rateLimitOtpMax: Number(rateLimitOtpMax),
+          rateLimitWindowSeconds: Number(rateLimitWindowSeconds),
+          requireEmailVerification,
+          requirePhoneVerification,
+          maintenance,
+        }).finally(() => setSaving(false));
       }}
     >
-      <label className="flex items-center justify-between">
-        <span>{t("allowSignups")}</span>
-        <input type="checkbox" checked={allowSignups} onChange={(e) => setAllow(e.target.checked)} className="size-5" />
-      </label>
-      <label className="flex items-center justify-between gap-3">
-        <span>{locale === "fa" ? "ثبت‌نام با ایمیل و رمز عبور" : "Email/password registration"}</span>
-        <input type="checkbox" checked={allowEmailSignup} onChange={(e) => setAllowEmail(e.target.checked)} className="size-5" />
-      </label>
-      <label className="flex items-center justify-between gap-3">
-        <span>{locale === "fa" ? "ثبت‌نام با شماره موبایل و پیامک" : "Phone/SMS registration"}</span>
-        <input type="checkbox" checked={allowPhoneSignup} onChange={(e) => setAllowPhone(e.target.checked)} className="size-5" />
-      </label>
-      <p className="text-xs leading-relaxed text-muted">{locale === "fa" ? "این گزینه‌ها ثبت‌نام جدید هر روش را کنترل می‌کنند؛ ورود کاربران موجود همچنان مجاز است." : "These switches control new registrations. Existing users can still sign in."}</p>
-      <label className="flex items-center justify-between gap-3">
-        <span>{locale === "fa" ? "الزام تأیید ایمیل" : "Require email verification"}</span>
-        <input type="checkbox" checked={requireEmailVerification} onChange={(e) => setRequireEmail(e.target.checked)} className="size-5" />
-      </label>
-      <label className="flex items-center justify-between gap-3">
-        <span>{locale === "fa" ? "الزام تأیید شماره تلفن" : "Require phone verification"}</span>
-        <input type="checkbox" checked={requirePhoneVerification} onChange={(e) => setRequirePhone(e.target.checked)} className="size-5" />
-      </label>
-      <p className="text-xs text-muted">{locale === "fa" ? "سیاست‌های تأیید در دیتابیس ذخیره می‌شوند؛ اعمال کامل روی تمام روش‌های ورود و نشست‌ها هنوز نیازمند تکمیل و آزمون جداگانه است." : "Verification policies are stored; full enforcement across all identity providers and sessions still requires additional implementation and tests."}</p>
-      <div className="grid grid-cols-2 gap-3">
-        <label className="block text-sm"><span className="text-muted">{locale === "fa" ? "حد ورود در پنجره" : "Login attempts/window"}</span><input type="number" min={3} max={30} value={rateLimitLoginMax} onChange={(e) => setRateLogin(e.target.value)} className="mt-1 h-10 w-full rounded-lg bg-header px-3" /></label>
-        <label className="block text-sm"><span className="text-muted">{locale === "fa" ? "حد ثبت‌نام" : "Signup attempts/window"}</span><input type="number" min={2} max={15} value={rateLimitSignupMax} onChange={(e) => setRateSignup(e.target.value)} className="mt-1 h-10 w-full rounded-lg bg-header px-3" /></label>
-        <label className="block text-sm"><span className="text-muted">{locale === "fa" ? "حد درخواست OTP" : "OTP attempts/window"}</span><input type="number" min={1} max={8} value={rateLimitOtpMax} onChange={(e) => setRateOtp(e.target.value)} className="mt-1 h-10 w-full rounded-lg bg-header px-3" /></label>
-        <label className="block text-sm"><span className="text-muted">{locale === "fa" ? "پنجره (ثانیه)" : "Window (seconds)"}</span><input type="number" min={30} max={3600} value={rateLimitWindowSeconds} onChange={(e) => setRateWindow(e.target.value)} className="mt-1 h-10 w-full rounded-lg bg-header px-3" /></label>
-      </div>
-      <label className="block text-sm">
-        <span className="text-muted">{t("maxUpload")}</span>
-        <input value={maxUploadBytes} onChange={(e) => setMax(e.target.value)} className="mt-1 h-11 w-full rounded-lg bg-header px-3" />
-      </label>
-      <section className="space-y-3 rounded-xl border border-line p-3">
-        <div className="flex items-center justify-between gap-3"><strong>{locale === "fa" ? "ذخیره‌سازی فایل روی VPS" : "VPS file storage"}</strong><span className="rounded-full bg-header px-3 py-1 text-xs">{initial.fileStorageEnabled ? (locale === "fa" ? "فعال" : "Enabled") : (locale === "fa" ? "غیرفعال" : "Disabled")}</span></div>
-        <p className="text-xs leading-relaxed text-muted">{locale === "fa" ? "ذخیره‌سازی روی دیسک فعلاً از این صفحه فعال نمی‌شود؛ ابتدا باید مسیر امن خارج از public، دسترسی نوشتن و پشتیبان‌گیری روی سرور بررسی شود. این بخش فقط سقف‌ها را تنظیم می‌کند." : "Disk storage cannot be enabled here. First verify a private path outside the web root, write permissions and backups on the server. This section only configures limits."}</p>
-        <label className="flex items-center justify-between gap-3 text-sm"><span>{locale === "fa" ? "اعمال سهمیه کاربران" : "Enforce user quotas"}</span><input type="checkbox" checked={fileUploadQuotaEnabled} onChange={(e) => setQuotaEnabled(e.target.checked)} className="size-5" /></label>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <label className="block text-sm"><span className="text-muted">{locale === "fa" ? "حداکثر حجم هر فایل (بایت)" : "Max file size (bytes)"}</span><input type="number" min={100000} max={524288000} value={fileUploadDefaultMaxBytes} onChange={(e) => setFileMax(e.target.value)} className="mt-1 h-10 w-full rounded-lg bg-header px-3" /></label>
-          <label className="block text-sm"><span className="text-muted">{locale === "fa" ? "سهمیه روزانه (بایت)" : "Daily quota (bytes)"}</span><input type="number" min={0} value={fileUploadDailyQuotaBytes} onChange={(e) => setDailyQuota(e.target.value)} className="mt-1 h-10 w-full rounded-lg bg-header px-3" /></label>
-          <label className="block text-sm"><span className="text-muted">{locale === "fa" ? "سهمیه هفتگی (بایت)" : "Weekly quota (bytes)"}</span><input type="number" min={0} value={fileUploadWeeklyQuotaBytes} onChange={(e) => setWeeklyQuota(e.target.value)} className="mt-1 h-10 w-full rounded-lg bg-header px-3" /></label>
-          <label className="block text-sm"><span className="text-muted">{locale === "fa" ? "سهمیه ماهانه (بایت)" : "Monthly quota (bytes)"}</span><input type="number" min={0} value={fileUploadMonthlyQuotaBytes} onChange={(e) => setMonthlyQuota(e.target.value)} className="mt-1 h-10 w-full rounded-lg bg-header px-3" /></label>
+      <section className="space-y-3">
+        <div>
+          <h2 className="font-semibold">{fa ? "ثبت‌نام و دسترسی حساب‌ها" : "Registration and account access"}</h2>
+          <p className="mt-1 text-xs text-muted">{fa ? "این سیاست‌ها در سمت سرور اعمال می‌شوند؛ ورود حساب‌های موجود با توقف ثبت‌نام مسدود نمی‌شود." : "These policies are enforced server-side. Pausing registration does not block sign-in for existing accounts."}</p>
         </div>
-        <p className="text-xs text-muted">{locale === "fa" ? "مقدار صفر به معنی بدون محدودیت است. واحد تمام فیلدها بایت است." : "Zero means unlimited. All values are in bytes."}</p>
+        <label className="flex items-center justify-between gap-3 rounded-lg bg-header p-3">
+          <span>{t("allowSignups")}</span>
+          <input type="checkbox" checked={allowSignups} onChange={(event) => setAllow(event.target.checked)} className="size-5" disabled={saving} />
+        </label>
+        <label className="flex items-center justify-between gap-3">
+          <span>{fa ? "ثبت‌نام با ایمیل و رمز عبور" : "Email/password registration"}</span>
+          <input type="checkbox" checked={allowEmailSignup} onChange={(event) => setAllowEmail(event.target.checked)} className="size-5" disabled={saving || !allowSignups} />
+        </label>
+        <label className="flex items-center justify-between gap-3">
+          <span>{fa ? "ثبت‌نام با شماره موبایل (حساب‌های جدید)" : "Phone/SMS registration (new accounts)"}</span>
+          <input type="checkbox" checked={allowPhoneSignup} onChange={(event) => setAllowPhone(event.target.checked)} className="size-5" disabled={saving || !allowSignups} />
+        </label>
+        <label className="grid gap-1 text-sm">
+          <span>{fa ? "پیام توقف ثبت‌نام (اختیاری)" : "Registration pause message (optional)"}</span>
+          <textarea value={maintenance} onChange={(event) => setNote(event.target.value)} maxLength={240} className="min-h-20 w-full rounded-lg bg-header p-3" disabled={saving} />
+        </label>
+        <p className="text-xs text-muted">{fa ? "اگر این پیام وارد شود، ساخت حساب جدید از هر دو روش ایمیل و موبایل متوقف می‌شود؛ ورود کاربران فعلی همچنان باز می‌ماند." : "When this message is set, new account creation is paused for both email and phone. Existing users can still sign in."}</p>
       </section>
-      <label className="block text-sm">
-        <span className="text-muted">{t("maintenance")}</span>
-        <textarea value={maintenance} onChange={(e) => setNote(e.target.value)} className="mt-1 h-24 w-full rounded-lg bg-header p-3" />
-      </label>
-      <button className="h-11 rounded-full bg-green px-5 text-on">{t("saveSettings")}</button>
+
+      <section className="space-y-3 border-t border-line pt-4">
+        <div>
+          <h2 className="font-semibold">{fa ? "سیاست تأیید هویت" : "Identity verification policy"}</h2>
+          <p className="mt-1 text-xs text-muted">{fa ? "فعال‌کردن این گزینه‌ها روی حساب‌های موجود هم اثر دارد؛ کاربران تأییدنشده ممکن است تا تکمیل تأیید، دسترسی به API برنامه را از دست بدهند." : "These policies also affect existing accounts. Unverified users may lose app API access until they complete verification."}</p>
+        </div>
+        <label className="flex items-center justify-between gap-3">
+          <span>{fa ? "الزام تأیید ایمیل" : "Require email verification"}</span>
+          <input type="checkbox" checked={requireEmailVerification} onChange={(event) => setRequireEmail(event.target.checked)} className="size-5" disabled={saving} />
+        </label>
+        <label className="flex items-center justify-between gap-3">
+          <span>{fa ? "الزام تأیید شماره تلفن" : "Require phone verification"}</span>
+          <input type="checkbox" checked={requirePhoneVerification} onChange={(event) => setRequirePhone(event.target.checked)} className="size-5" disabled={saving} />
+        </label>
+        <p className="text-xs text-muted">{fa ? "حساب‌های مدیر برای بازیابی تنظیمات از این الزام عمومی مستثنا هستند." : "Administrator accounts retain a recovery path and are exempt from this general user policy."}</p>
+      </section>
+
+      <section className="space-y-3 border-t border-line pt-4">
+        <div>
+          <h2 className="font-semibold">{fa ? "محدودیت درخواست‌های احراز هویت" : "Authentication rate limits"}</h2>
+          <p className="mt-1 text-xs text-muted">{fa ? "در صورت وجود، IP پراکسی مورد اعتماد مبناست؛ در غیر این صورت اثرانگشت تقریبی مرورگر استفاده می‌شود." : "Limits use a trusted proxy IP when available; otherwise a coarse browser fingerprint is used."}</p>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="block text-sm"><span className="text-muted">{fa ? "تلاش ورود در هر پنجره" : "Login attempts per window"}</span><input type="number" min={3} max={30} step={1} required value={rateLimitLoginMax} onChange={(event) => setRateLogin(event.target.value)} className={field} disabled={saving} /></label>
+          <label className="block text-sm"><span className="text-muted">{fa ? "تلاش ثبت‌نام در هر پنجره" : "Signup attempts per window"}</span><input type="number" min={2} max={15} step={1} required value={rateLimitSignupMax} onChange={(event) => setRateSignup(event.target.value)} className={field} disabled={saving} /></label>
+          <label className="block text-sm"><span className="text-muted">{fa ? "درخواست‌های OTP در هر پنجره" : "OTP requests per window"}</span><input type="number" min={1} max={8} step={1} required value={rateLimitOtpMax} onChange={(event) => setRateOtp(event.target.value)} className={field} disabled={saving} /></label>
+          <label className="block text-sm"><span className="text-muted">{fa ? "طول پنجره (ثانیه)" : "Window length (seconds)"}</span><input type="number" min={30} max={3600} step={1} required value={rateLimitWindowSeconds} onChange={(event) => setRateWindow(event.target.value)} className={field} disabled={saving} /></label>
+        </div>
+      </section>
+
+      <section className="space-y-3 border-t border-line pt-4">
+        <div>
+          <h2 className="font-semibold">{fa ? "محدودیت حجم آپلود قدیمی" : "Legacy upload size limit"}</h2>
+          <p className="mt-1 text-xs text-muted">{fa ? "این سقف برای مسیرهای قدیمی آپلود استفاده می‌شود. سقف هر فایل و سهمیه‌های ذخیره‌سازی VPS در تب «مدیریت فضای ذخیره‌سازی» تنظیم می‌شوند." : "This cap applies to legacy upload paths. Per-file limits and VPS storage quotas are managed in the Storage Management tab."}</p>
+        </div>
+        <label className="block text-sm">
+          <span className="text-muted">{fa ? "حداکثر حجم (بایت)" : "Maximum size (bytes)"}</span>
+          <input type="number" min={100000} max={4000000} step={1} required value={maxUploadBytes} onChange={(event) => setMax(event.target.value)} className={field} disabled={saving} />
+        </label>
+      </section>
+
+      {initial.updatedAt ? <p className="border-t border-line pt-3 text-xs text-muted">{fa ? "آخرین تغییر تنظیمات: " : "Last settings change: "}{formatChatTime(initial.updatedAt, locale, (key) => key)}</p> : null}
+      <button type="submit" disabled={saving} className="h-11 rounded-full bg-green px-5 text-sm text-on disabled:opacity-50">
+        {saving ? (fa ? "در حال ذخیره…" : "Saving…") : t("saveSettings")}
+      </button>
     </form>
   );
 }

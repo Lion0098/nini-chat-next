@@ -65,9 +65,9 @@ async function handleAuth(request: Request): Promise<Response> {
       const sql = await getSql();
       const rows = await sql<{ value: string }>`select value from system_settings where key = ${"allow_signups"}`;
       const allSignups = (rows[0]?.value ?? "true") !== "false";
+      const maintenance = (await setting("maintenance_message", "")).trim();
       if (path === "/sign-up/email") {
         const emailAllowed = (await setting("allow_email_signup", "true")) !== "false";
-        const maintenance = (await setting("maintenance_message", "")).trim();
         if (maintenance) {
           return Response.json({ code: "MAINTENANCE", message: maintenance }, { status: 503 });
         }
@@ -82,8 +82,11 @@ async function handleAuth(request: Request): Promise<Response> {
         const phone = String(body.phoneNumber ?? "");
         const existing = phone ? await sql<{ id: string }>`select id from "user" where "phoneNumber" = ${phone} limit 1` : [];
         const phoneAllowed = (await setting("allow_phone_signup", "true")) !== "false";
-        // Existing phone accounts can always request an OTP to sign in; these flags
-        // only prevent creating a new account when registration is disabled.
+        // Existing phone accounts can always request an OTP to sign in; registration
+        // pause and signup flags only block creation of new accounts.
+        if (!existing.length && maintenance) {
+          return Response.json({ code: "MAINTENANCE", message: maintenance }, { status: 503 });
+        }
         if (!existing.length && (!allSignups || !phoneAllowed)) {
           return Response.json({ code: "SIGNUP_DISABLED", message: "Registration is currently unavailable." }, { status: 403 });
         }

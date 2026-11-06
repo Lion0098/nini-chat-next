@@ -2643,113 +2643,125 @@ export const adminGetSettings = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     const sql = await getSql();
-    await requireAdmin(sql, context.userId);
+    await requireAdminPermission(sql, context.userId, "system.manage");
+    const readBounded = async (key: string, fallback: number, min: number, max: number) => {
+      const value = Number(await setting(sql, key, String(fallback)));
+      return Number.isSafeInteger(value) && value >= min && value <= max ? value : fallback;
+    };
+    const keys = [
+      "allow_signups", "allow_email_signup", "allow_phone_signup", "max_upload_bytes",
+      "rate_limit_login_max", "rate_limit_signup_max", "rate_limit_otp_max", "rate_limit_window_seconds",
+      "require_email_verification", "require_phone_verification", "maintenance_message",
+    ];
+    const updated = await sql.query<{ updated_at: unknown }>(
+      "select max(updated_at) as updated_at from system_settings where key = any($1::text[])",
+      [keys],
+    );
     return {
       allowSignups: (await setting(sql, "allow_signups", "true")) !== "false",
       allowEmailSignup: (await setting(sql, "allow_email_signup", "true")) !== "false",
       allowPhoneSignup: (await setting(sql, "allow_phone_signup", "true")) !== "false",
-      maxUploadBytes: Number(await setting(sql, "max_upload_bytes", "2000000")),
-      rateLimitLoginMax: Number(await setting(sql, "rate_limit_login_max", "10")),
-      rateLimitSignupMax: Number(await setting(sql, "rate_limit_signup_max", "5")),
-      rateLimitOtpMax: Number(await setting(sql, "rate_limit_otp_max", "3")),
-      rateLimitWindowSeconds: Number(await setting(sql, "rate_limit_window_seconds", "60")),
+      maxUploadBytes: await readBounded("max_upload_bytes", 2_000_000, 100_000, 4_000_000),
+      rateLimitLoginMax: await readBounded("rate_limit_login_max", 10, 3, 30),
+      rateLimitSignupMax: await readBounded("rate_limit_signup_max", 5, 2, 15),
+      rateLimitOtpMax: await readBounded("rate_limit_otp_max", 3, 1, 8),
+      rateLimitWindowSeconds: await readBounded("rate_limit_window_seconds", 60, 30, 3600),
       requireEmailVerification: (await setting(sql, "require_email_verification", "false")) === "true",
       requirePhoneVerification: (await setting(sql, "require_phone_verification", "false")) === "true",
       maintenance: await setting(sql, "maintenance_message", ""),
-      fileStorageEnabled: (await setting(sql, "file_storage_enabled", "false")) === "true",
-      fileUploadDefaultMaxBytes: Number(await setting(sql, "file_upload_default_max_bytes", "20971520")),
-      fileUploadDailyQuotaBytes: Number(await setting(sql, "file_upload_daily_quota_bytes", "536870912")),
-      fileUploadWeeklyQuotaBytes: Number(await setting(sql, "file_upload_weekly_quota_bytes", "2147483648")),
-      fileUploadMonthlyQuotaBytes: Number(await setting(sql, "file_upload_monthly_quota_bytes", "5368709120")),
-      fileUploadQuotaEnabled: (await setting(sql, "file_upload_quota_enabled", "true")) === "true",
+      updatedAt: iso(updated[0]?.updated_at),
     };
   });
 
 export const adminSaveSettings = createServerFn({ method: "POST" })
-  .validator((input: unknown) => rec(input))
+  .validator((input: unknown) => {
+    const o = rec(input);
+    const boolean = (key: string) => {
+      const value = o[key];
+      if (value !== undefined && typeof value !== "boolean") throw new Error("invalid_" + key);
+      return value as boolean | undefined;
+    };
+    const integer = (key: string, min: number, max: number) => {
+      const value = o[key];
+      if (value === undefined) return undefined;
+      if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min || value > max) {
+        throw new Error("invalid_" + key);
+      }
+      return value;
+    };
+    if (o.maintenance !== undefined && (typeof o.maintenance !== "string" || o.maintenance.length > 240)) {
+      throw new Error("invalid_maintenance");
+    }
+    return {
+      allowSignups: boolean("allowSignups"),
+      allowEmailSignup: boolean("allowEmailSignup"),
+      allowPhoneSignup: boolean("allowPhoneSignup"),
+      requireEmailVerification: boolean("requireEmailVerification"),
+      requirePhoneVerification: boolean("requirePhoneVerification"),
+      rateLimitLoginMax: integer("rateLimitLoginMax", 3, 30),
+      rateLimitSignupMax: integer("rateLimitSignupMax", 2, 15),
+      rateLimitOtpMax: integer("rateLimitOtpMax", 1, 8),
+      rateLimitWindowSeconds: integer("rateLimitWindowSeconds", 30, 3600),
+      maxUploadBytes: integer("maxUploadBytes", 100_000, 4_000_000),
+      maintenance: o.maintenance === undefined ? undefined : clean(o.maintenance, 240),
+    };
+  })
   .middleware([authMiddleware])
   .handler(async ({ context, data }) => {
     const sql = await getSql();
-    await requireAdmin(sql, context.userId);
-    const allow = Boolean(data.allowSignups);
-    const allowEmail = data.allowEmailSignup === undefined
-      ? (await setting(sql, "allow_email_signup", "true")) !== "false"
-      : Boolean(data.allowEmailSignup);
-    const allowPhone = data.allowPhoneSignup === undefined
-      ? (await setting(sql, "allow_phone_signup", "true")) !== "false"
-      : Boolean(data.allowPhoneSignup);
-    let max = Number(data.maxUploadBytes);
-    if (!Number.isFinite(max)) max = 2_000_000;
-    max = Math.min(4_000_000, Math.max(100_000, Math.floor(max)));
-    const maintenance = clean(data.maintenance, 240);
-    const bounded = (value: unknown, fallback: number, min: number, maxValue: number) => {
-      const n = Number(value);
-      return Number.isFinite(n) ? Math.min(maxValue, Math.max(min, Math.floor(n))) : fallback;
+    await requireAdminPermission(sql, context.userId, "system.manage");
+    const readBounded = async (key: string, fallback: number, min: number, max: number) => {
+      const value = Number(await setting(sql, key, String(fallback)));
+      return Number.isSafeInteger(value) && value >= min && value <= max ? value : fallback;
     };
-    const rateLogin = bounded(data.rateLimitLoginMax, Number(await setting(sql, "rate_limit_login_max", "10")), 3, 30);
-    const rateSignup = bounded(data.rateLimitSignupMax, Number(await setting(sql, "rate_limit_signup_max", "5")), 2, 15);
-    const rateOtp = bounded(data.rateLimitOtpMax, Number(await setting(sql, "rate_limit_otp_max", "3")), 1, 8);
-    const rateWindow = bounded(data.rateLimitWindowSeconds, Number(await setting(sql, "rate_limit_window_seconds", "60")), 30, 3600);
-    const requireEmailVerification = data.requireEmailVerification === undefined
-      ? (await setting(sql, "require_email_verification", "false")) === "true"
-      : Boolean(data.requireEmailVerification);
-    const requirePhoneVerification = data.requirePhoneVerification === undefined
-      ? (await setting(sql, "require_phone_verification", "false")) === "true"
-      : Boolean(data.requirePhoneVerification);
-    const pairs: [string, string][] = [
-      ["allow_signups", allow ? "true" : "false"],
-      ["allow_email_signup", allowEmail ? "true" : "false"],
-      ["allow_phone_signup", allowPhone ? "true" : "false"],
-      ["max_upload_bytes", String(max)],
-      ["maintenance_message", maintenance],
-      ["rate_limit_login_max", String(rateLogin)],
-      ["rate_limit_signup_max", String(rateSignup)],
-      ["rate_limit_otp_max", String(rateOtp)],
-      ["rate_limit_window_seconds", String(rateWindow)],
-      ["require_email_verification", requireEmailVerification ? "true" : "false"],
-      ["require_phone_verification", requirePhoneVerification ? "true" : "false"],
-    ];
-    const fileLimit = bounded(data.fileUploadDefaultMaxBytes, Number(await setting(sql, "file_upload_default_max_bytes", "20971520")), 100_000, 500 * 1024 * 1024);
-    const dailyQuota = bounded(data.fileUploadDailyQuotaBytes, Number(await setting(sql, "file_upload_daily_quota_bytes", "536870912")), 0, 100 * 1024 * 1024 * 1024);
-    const weeklyQuota = bounded(data.fileUploadWeeklyQuotaBytes, Number(await setting(sql, "file_upload_weekly_quota_bytes", "2147483648")), 0, 500 * 1024 * 1024 * 1024);
-    const monthlyQuota = bounded(data.fileUploadMonthlyQuotaBytes, Number(await setting(sql, "file_upload_monthly_quota_bytes", "5368709120")), 0, 2 * 1024 * 1024 * 1024 * 1024);
-    const quotaEnabled = data.fileUploadQuotaEnabled === undefined ? (await setting(sql, "file_upload_quota_enabled", "true")) === "true" : Boolean(data.fileUploadQuotaEnabled);
-    pairs.push(["file_upload_default_max_bytes", String(fileLimit)], ["file_upload_daily_quota_bytes", String(dailyQuota)], ["file_upload_weekly_quota_bytes", String(weeklyQuota)], ["file_upload_monthly_quota_bytes", String(monthlyQuota)], ["file_upload_quota_enabled", quotaEnabled ? "true" : "false"]);
-    const previous = {
+    const current = {
       allowSignups: (await setting(sql, "allow_signups", "true")) !== "false",
       allowEmailSignup: (await setting(sql, "allow_email_signup", "true")) !== "false",
       allowPhoneSignup: (await setting(sql, "allow_phone_signup", "true")) !== "false",
-      maxUploadBytes: Number(await setting(sql, "max_upload_bytes", "2000000")),
-      maintenance: await setting(sql, "maintenance_message", ""),
+      requireEmailVerification: (await setting(sql, "require_email_verification", "false")) === "true",
+      requirePhoneVerification: (await setting(sql, "require_phone_verification", "false")) === "true",
+      rateLimitLoginMax: await readBounded("rate_limit_login_max", 10, 3, 30),
+      rateLimitSignupMax: await readBounded("rate_limit_signup_max", 5, 2, 15),
+      rateLimitOtpMax: await readBounded("rate_limit_otp_max", 3, 1, 8),
+      rateLimitWindowSeconds: await readBounded("rate_limit_window_seconds", 60, 30, 3600),
+      maxUploadBytes: await readBounded("max_upload_bytes", 2_000_000, 100_000, 4_000_000),
+      maintenance: clean(await setting(sql, "maintenance_message", ""), 240),
     };
-    for (const [key, value] of pairs) {
-      await sql`
-        insert into system_settings (key, value) values (${key}, ${value})
-        on conflict (key) do update set value = ${value}
-      `;
-    }
+    const after = {
+      allowSignups: data.allowSignups ?? current.allowSignups,
+      allowEmailSignup: data.allowEmailSignup ?? current.allowEmailSignup,
+      allowPhoneSignup: data.allowPhoneSignup ?? current.allowPhoneSignup,
+      requireEmailVerification: data.requireEmailVerification ?? current.requireEmailVerification,
+      requirePhoneVerification: data.requirePhoneVerification ?? current.requirePhoneVerification,
+      rateLimitLoginMax: data.rateLimitLoginMax ?? current.rateLimitLoginMax,
+      rateLimitSignupMax: data.rateLimitSignupMax ?? current.rateLimitSignupMax,
+      rateLimitOtpMax: data.rateLimitOtpMax ?? current.rateLimitOtpMax,
+      rateLimitWindowSeconds: data.rateLimitWindowSeconds ?? current.rateLimitWindowSeconds,
+      maxUploadBytes: data.maxUploadBytes ?? current.maxUploadBytes,
+      maintenance: data.maintenance ?? current.maintenance,
+    };
+    const pairs: Record<string, string> = {
+      allow_signups: String(after.allowSignups),
+      allow_email_signup: String(after.allowEmailSignup),
+      allow_phone_signup: String(after.allowPhoneSignup),
+      require_email_verification: String(after.requireEmailVerification),
+      require_phone_verification: String(after.requirePhoneVerification),
+      rate_limit_login_max: String(after.rateLimitLoginMax),
+      rate_limit_signup_max: String(after.rateLimitSignupMax),
+      rate_limit_otp_max: String(after.rateLimitOtpMax),
+      rate_limit_window_seconds: String(after.rateLimitWindowSeconds),
+      max_upload_bytes: String(after.maxUploadBytes),
+      maintenance_message: after.maintenance,
+    };
+    await sql.query(
+      "insert into system_settings (key, value, updated_at) select key, value, now() from jsonb_each_text($1::jsonb) on conflict (key) do update set value = excluded.value, updated_at = excluded.updated_at",
+      [JSON.stringify(pairs)],
+    );
     await auditAdminEvent(sql, context.userId, "system.settings_updated", null, {
-      before: previous,
-      after: {
-        allowSignups: allow,
-        allowEmailSignup: allowEmail,
-        allowPhoneSignup: allowPhone,
-        maxUploadBytes: max,
-        rateLimitLoginMax: rateLogin,
-        rateLimitSignupMax: rateSignup,
-        rateLimitOtpMax: rateOtp,
-        rateLimitWindowSeconds: rateWindow,
-        requireEmailVerification,
-        requirePhoneVerification,
-        maintenance,
-        fileUploadDefaultMaxBytes: fileLimit,
-        fileUploadDailyQuotaBytes: dailyQuota,
-        fileUploadWeeklyQuotaBytes: weeklyQuota,
-        fileUploadMonthlyQuotaBytes: monthlyQuota,
-        fileUploadQuotaEnabled: quotaEnabled,
-      },
+      before: current,
+      after,
     });
-    return ok(true);
+    return ok({ updatedAt: new Date().toISOString() });
   });
 
 
