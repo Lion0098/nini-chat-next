@@ -2296,15 +2296,19 @@ export const adminListGroups = createServerFn({ method: "GET" })
       members: number;
       created_at: unknown;
       updated_at: unknown;
+      archived_at: unknown;
+      visibility: string;
+      join_policy: string;
     }>`
-      select c.id, c.title, c.about, count(m.user_id)::int as members, c.created_at, c.updated_at
+      select c.id, c.title, c.about, count(m.user_id)::int as members, c.created_at, c.updated_at,
+             c.archived_at, c.visibility, c.join_policy
       from chats c
       left join chat_members m on m.chat_id = c.id
       where c.kind = 'group'
-        and (${data.q} = '' or lower(coalesce(c.title, '')) like ${like})
+        and (${data.q} = '' or lower(coalesce(c.title, '')) like ${like} or c.id ilike ${like})
       group by c.id
-      order by c.updated_at desc
-      limit 100
+      order by (c.archived_at is not null), c.updated_at desc
+      limit 200
     `;
     return rows.map((r) => ({
       id: r.id,
@@ -2313,6 +2317,9 @@ export const adminListGroups = createServerFn({ method: "GET" })
       members: num(r.members),
       createdAt: iso(r.created_at) ?? "",
       updatedAt: iso(r.updated_at) ?? "",
+      archivedAt: iso(r.archived_at),
+      visibility: r.visibility,
+      joinPolicy: r.join_policy,
     }));
   });
 
@@ -2325,10 +2332,15 @@ export const adminUpdateGroup = createServerFn({ method: "POST" })
     const id = clean(data.id, 80);
     const title = clean(data.title, 60);
     if (!id || !title) return err("name_required");
-    await sql`
-      update chats set title = ${title}, about = ${clean(data.about, 200)}, updated_at = now()
-      where id = ${id} and kind = 'group'
+    const visibility = data.visibility === "public" ? "public" : "private";
+    const joinPolicy = ["invite", "approval", "open"].includes(String(data.joinPolicy)) ? String(data.joinPolicy) : "invite";
+    const changed = await sql<{ id: string }>`
+      update chats set title = ${title}, about = ${clean(data.about, 200)}, visibility = ${visibility},
+        join_policy = ${joinPolicy}, updated_at = now()
+      where id = ${id} and kind = 'group' returning id
     `;
+    if (!changed.length) return err("not_found");
+    await auditAdminEvent(sql, context.userId, "group.updated", null, { chatId: id, visibility, joinPolicy });
     return ok(true);
   });
 
@@ -2344,6 +2356,123 @@ export const adminDeleteGroup = createServerFn({ method: "POST" })
     await requireAdmin(sql, context.userId);
     await sql`delete from chats where id = ${data.id} and kind = 'group'`;
     await auditAdminEvent(sql, context.userId, "group.deleted", null, { chatId: data.id });
+    return ok(true);
+  });
+
+export const adminListGroupMembers = createServerFn({ method: "GET" })
+  .validator((input: unknown) => {
+    const id = clean(rec(input ?? {}).id, 80);
+    if (!id) throw new Error("bad_input");
+    return { id };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    await requireAdmin(sql, context.userId);
+    const rows = await sql<{ user_id: string; display_name: string | null; username: string | null; role: string; joined_at: unknown }>`
+      select m.user_id, p.display_name, p.username, m.role, m.joined_at
+      from chat_members m left join profiles p on p.user_id = m.user_id
+      inner join chats c on c.id = m.chat_id
+      where m.chat_id = ${data.id} and c.kind = 'group'
+      order by (m.role = 'owner') desc, m.joined_at asc limit 500
+    `;
+    return rows.map((row) => ({ userId: row.user_id, displayName: row.display_name || row.username || row.user_id,
+      role: row.role, joinedAt: iso(row.joined_at) ?? "" }));
+  });
+
+export const adminRemoveGroupMember = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input);
+    const id = clean(o.id, 80);
+    const userId = clean(o.userId, 120);
+    const reason = clean(o.reason, 240);
+    if (!id || !userId || reason.length < 3) throw new Error("bad_input");
+    return { id, userId, reason };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    await requireAdmin(sql, context.userId);
+    const target = await sql<{ role: string }>`
+      select m.role from chat_members m inner join chats c on c.id = m.chat_id
+      where m.chat_id = ${data.id} and m.user_id = ${data.userId} and c.kind = 'group' limit 1
+    `;
+    if (!target.length) return err("not_found");
+    if (target[0].role === "owner") return err("group_owner_transfer_required");
+    await sql`delete from chat_members where chat_id = ${data.id} and user_id = ${data.userId}`;
+    await sql`insert into group_membership_history(chat_id,subject_user_id,actor_user_id,action,old_role,details)
+      values (${data.id},${data.userId},${context.userId},'removed',${target[0].role},${JSON.stringify({ reason: data.reason, source: 'admin' })}::jsonb)`;
+    await auditAdminEvent(sql, context.userId, "group.member_removed", data.userId, { chatId: data.id, reason: data.reason });
+    return ok(true);
+  });
+
+export const adminSetGroupArchived = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input);
+    const id = clean(o.id, 80);
+    if (!id || typeof o.archived !== "boolean") throw new Error("bad_input");
+    return { id, archived: o.archived };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    await requireAdmin(sql, context.userId);
+    const rows = await sql<{ id: string }>`
+      update chats set archived_at = case when ${data.archived} then now() else null end, updated_at = now()
+      where id = ${data.id} and kind = 'group' returning id
+    `;
+    if (!rows.length) return err("not_found");
+    await auditAdminEvent(sql, context.userId, data.archived ? "group.archived" : "group.unarchived", null, { chatId: data.id });
+    return ok(true);
+  });
+
+export const adminListStories = createServerFn({ method: "GET" })
+  .validator((input: unknown) => {
+    const o = rec(input ?? {});
+    const status = ["active", "expired"].includes(String(o.status)) ? String(o.status) : "all";
+    return { q: clean(o.q, 80).toLowerCase(), status };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    await requireAdmin(sql, context.userId);
+    const like = `%${data.q.replace(/[%_]/g, "")}%`;
+    const rows = await sql<{ id: string; user_id: string; display_name: string | null; username: string | null; kind: string; caption: string | null; created_at: unknown; expires_at: unknown; views: number }>`
+      select s.id, s.user_id, p.display_name, p.username, s.kind, s.caption, s.created_at, s.expires_at,
+             count(v.viewer_id)::int as views
+      from statuses s
+      left join profiles p on p.user_id = s.user_id
+      left join status_views v on v.status_id = s.id
+      where (${data.q} = '' or lower(coalesce(p.display_name, '')) like ${like}
+        or lower(coalesce(p.username, '')) like ${like} or lower(coalesce(s.caption, '')) like ${like} or s.id ilike ${like})
+        and (${data.status} = 'all' or (${data.status} = 'active' and s.expires_at > now())
+          or (${data.status} = 'expired' and s.expires_at <= now()))
+      group by s.id, p.display_name, p.username
+      order by s.created_at desc, s.id desc limit 200
+    `;
+    return rows.map((row) => ({ id: row.id, userId: row.user_id, displayName: row.display_name || row.username || row.user_id,
+      kind: row.kind, caption: row.caption || "", createdAt: iso(row.created_at) ?? "", expiresAt: iso(row.expires_at) ?? "",
+      views: num(row.views), expired: new Date(String(row.expires_at)).getTime() <= Date.now() }));
+  });
+
+export const adminDeleteStory = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input);
+    const id = clean(o.id, 80);
+    const reason = clean(o.reason, 240);
+    if (!id || reason.length < 3) throw new Error("bad_input");
+    return { id, reason };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    await requireAdmin(sql, context.userId);
+    const rows = await sql<{ user_id: string; caption: string | null }>`
+      select user_id, caption from statuses where id = ${data.id} limit 1
+    `;
+    if (!rows.length) return err("not_found");
+    await sql`delete from statuses where id = ${data.id}`;
+    await auditAdminEvent(sql, context.userId, "story.deleted", rows[0].user_id, { storyId: data.id, reason: data.reason, captionLength: rows[0].caption?.length ?? 0 });
     return ok(true);
   });
 

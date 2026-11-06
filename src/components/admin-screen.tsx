@@ -22,6 +22,11 @@ import {
   adminSetUserRestriction,
   adminRevokeUserSessions,
   adminDeleteGroup,
+  adminSetGroupArchived,
+  adminListGroupMembers,
+  adminRemoveGroupMember,
+  adminListStories,
+  adminDeleteStory,
   adminGetSettings,
   adminListGroups,
   adminListReports,
@@ -33,7 +38,7 @@ import {
   getMe,
 } from "@/server/api";
 
-type Tab = "dashboard" | "users" | "groups" | "reports" | "appeals" | "audit" | "system" | "ops" | "insights";
+type Tab = "dashboard" | "users" | "groups" | "stories" | "reports" | "appeals" | "audit" | "system" | "ops" | "insights";
 type AuditPage = Awaited<ReturnType<typeof adminListAuditEvents>>;
 
 export function AdminScreen() {
@@ -45,6 +50,8 @@ export function AdminScreen() {
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [userStatusFilter, setUserStatusFilter] = useState<"all" | "active" | "restricted" | "deactivated">("all");
   const [reportStatus, setReportStatus] = useState("");
+  const [storyStatus, setStoryStatus] = useState<"all" | "active" | "expired">("all");
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [announcementTitle, setAnnouncementTitle] = useState("");
   const [announcementBody, setAnnouncementBody] = useState("");
   const dashboard = useQuery({
@@ -76,6 +83,16 @@ export function AdminScreen() {
     queryKey: ["admin-groups", q],
     queryFn: () => adminListGroups({ data: { q } }),
     enabled: meQ.data?.role === "admin" && tab === "groups",
+  });
+  const groupMembers = useQuery({
+    queryKey: ["admin-group-members", selectedGroupId],
+    queryFn: () => adminListGroupMembers({ data: { id: selectedGroupId! } }),
+    enabled: meQ.data?.role === "admin" && tab === "groups" && Boolean(selectedGroupId),
+  });
+  const stories = useQuery({
+    queryKey: ["admin-stories", q, storyStatus],
+    queryFn: () => adminListStories({ data: { q, status: storyStatus } }),
+    enabled: meQ.data?.role === "admin" && tab === "stories",
   });
   const reports = useQuery({
     queryKey: ["admin-reports", reportStatus],
@@ -120,10 +137,10 @@ export function AdminScreen() {
     );
   }
 
-  const tabs: Tab[] = ["dashboard", "users", "groups", "reports", "appeals", "audit", "insights", "system", "ops"];
+  const tabs: Tab[] = ["dashboard", "users", "groups", "stories", "reports", "appeals", "audit", "insights", "system", "ops"];
   const label: Record<Tab, string> = {
     dashboard: locale === "fa" ? "داشبورد" : "Dashboard",
-    users: t("users"), groups: t("groups"), reports: t("reports"),
+    users: t("users"), groups: t("groups"), stories: locale === "fa" ? "مدیریت استوری‌ها" : "Stories", reports: t("reports"),
     audit: locale === "fa" ? "گزارش رویدادها" : "Audit log", system: t("system"),
     appeals: locale === "fa" ? "اعتراض‌های کاربران" : "Appeals",
     insights: locale === "fa" ? "تحلیل و پیام همگانی" : "Analytics & bulk messages",
@@ -146,7 +163,7 @@ export function AdminScreen() {
             </button>
           ))}
         </div>
-        {["users", "groups", "audit"].includes(tab) ? (
+        {["users", "groups", "stories", "audit"].includes(tab) ? (
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("searchUsersPh")} className="mb-4 h-11 w-full rounded-lg bg-panel px-3 outline-none" />
         ) : null}
         {tab === "dashboard" ? (
@@ -353,37 +370,34 @@ export function AdminScreen() {
           </div>
         ) : null}
         {tab === "groups" ? (
-          <div className="space-y-2">
+          <section className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted"><span>{locale === "fa" ? `تعداد گروه‌ها: ${(groups.data ?? []).length}` : `Groups: ${(groups.data ?? []).length}`}</span><button type="button" onClick={() => void groups.refetch()} className="underline">{locale === "fa" ? "بروزرسانی" : "Refresh"}</button></div>
+            {groups.isLoading ? <p className="rounded-xl bg-panel p-4 text-sm text-muted">{locale === "fa" ? "در حال بارگذاری گروه‌ها…" : "Loading groups…"}</p> : null}
+            {groups.isError ? <p role="alert" className="rounded-xl bg-panel p-4 text-sm">{locale === "fa" ? "خطا در دریافت گروه‌ها" : "Could not load groups"}</p> : null}
+            {(groups.data ?? []).length === 0 && !groups.isLoading ? <p className="rounded-xl bg-panel p-4 text-sm text-muted">{locale === "fa" ? "گروهی پیدا نشد." : "No groups found."}</p> : null}
             {(groups.data ?? []).map((g) => (
-              <div key={g.id} className="flex flex-wrap items-center gap-3 rounded-xl bg-panel px-3 py-3">
-                <div className="min-w-0 flex-1">
-                  <div className="font-medium">{g.title}</div>
-                  <div className="text-xs text-muted">{g.members} {t("members")}</div>
+              <article key={g.id} className="space-y-2 rounded-xl bg-panel p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2"><div className="min-w-0"><strong className="break-words">{g.title}</strong><p className="mt-1 text-xs text-muted">{g.members} {t("members")} · {g.visibility === "public" ? (locale === "fa" ? "عمومی" : "Public") : (locale === "fa" ? "خصوصی" : "Private")} · {g.joinPolicy}</p><p className="break-all text-[11px] text-muted">{g.id}</p></div><span className="rounded-full bg-shell px-2 py-1 text-xs">{g.archivedAt ? (locale === "fa" ? "بایگانی‌شده" : "Archived") : (locale === "fa" ? "فعال" : "Active")}</span></div>
+                {g.about ? <p className="text-sm text-muted">{g.about}</p> : null}
+                <div className="flex flex-wrap gap-3 text-sm">
+                  <button type="button" onClick={() => setSelectedGroupId(selectedGroupId === g.id ? null : g.id)}>{selectedGroupId === g.id ? (locale === "fa" ? "بستن اعضا" : "Hide members") : (locale === "fa" ? "مدیریت اعضا" : "Manage members")}</button>
+                  <button type="button" className="text-green-2" onClick={() => { const title = window.prompt(t("groupTitle"), g.title); if (!title?.trim()) return; const about = window.prompt(locale === "fa" ? "توضیحات گروه" : "Group description", g.about); const visibility = window.confirm(locale === "fa" ? "گروه عمومی باشد؟ (لغو = خصوصی)" : "Make this group public? (Cancel = private)") ? "public" : "private"; const joinPolicy = window.prompt(locale === "fa" ? "سیاست عضویت: invite / approval / open" : "Join policy: invite / approval / open", g.joinPolicy); void adminUpdateGroup({ data: { id: g.id, title, about: about ?? g.about, visibility, joinPolicy: joinPolicy || g.joinPolicy } }).then((res) => { if (!res.ok) toast.error(err(res.error)); else { toast.success(locale === "fa" ? "گروه بروزرسانی شد" : "Group updated"); void qc.invalidateQueries({ queryKey: ["admin-groups"] }); } }); }}>{locale === "fa" ? "ویرایش تنظیمات" : "Edit settings"}</button>
+                  <button type="button" onClick={() => { const archived = !g.archivedAt; if (!window.confirm(locale === "fa" ? (archived ? "گروه بایگانی شود؟" : "گروه از بایگانی خارج شود؟") : (archived ? "Archive this group?" : "Unarchive this group?"))) return; void adminSetGroupArchived({ data: { id: g.id, archived } }).then((res) => { if (!res.ok) toast.error(err(res.error)); else void qc.invalidateQueries({ queryKey: ["admin-groups"] }); }); }}>{g.archivedAt ? (locale === "fa" ? "خروج از بایگانی" : "Unarchive") : (locale === "fa" ? "بایگانی" : "Archive")}</button>
+                  <button type="button" className="text-danger" onClick={() => { if (!window.confirm(locale === "fa" ? "حذف گروه و پیام‌های وابسته؟ این کار قابل بازگشت نیست." : "Permanently delete this group and its messages? This cannot be undone.")) return; void adminDeleteGroup({ data: { id: g.id } }).then((res) => { if (!res.ok) toast.error(err(res.error)); else { toast.success(locale === "fa" ? "گروه حذف شد" : "Group deleted"); void qc.invalidateQueries({ queryKey: ["admin-groups"] }); } }); }}>{t("deleteGroup")}</button>
                 </div>
-                <button
-                  type="button"
-                  className="text-sm text-green-2"
-                  onClick={() => {
-                    const title = window.prompt(t("groupTitle"), g.title);
-                    if (!title) return;
-                    void adminUpdateGroup({ data: { id: g.id, title, about: g.about } }).then(() => qc.invalidateQueries({ queryKey: ["admin-groups"] }));
-                  }}
-                >
-                  {t("editGroup")}
-                </button>
-                <button
-                  type="button"
-                  className="text-sm text-danger"
-                  onClick={() => {
-                    if (!window.confirm(t("confirmDelete"))) return;
-                    void adminDeleteGroup({ data: { id: g.id } }).then(() => qc.invalidateQueries({ queryKey: ["admin-groups"] }));
-                  }}
-                >
-                  {t("deleteGroup")}
-                </button>
-              </div>
+                {selectedGroupId === g.id ? <div className="space-y-2 rounded-lg border border-line p-2"><div className="text-xs text-muted">{locale === "fa" ? "اعضای گروه" : "Group members"}</div>{groupMembers.isLoading ? <p className="text-xs text-muted">{locale === "fa" ? "در حال دریافت…" : "Loading…"}</p> : null}{(groupMembers.data ?? []).map((member) => <div key={member.userId} className="flex flex-wrap items-center justify-between gap-2 text-xs"><span>{member.displayName} · {member.role}</span>{member.role !== "owner" ? <button type="button" className="text-danger" onClick={() => { const reason = window.prompt(locale === "fa" ? "دلیل حذف عضو (حداقل ۳ حرف)" : "Reason for removing member (min 3 chars)"); if (!reason || reason.trim().length < 3) return; void adminRemoveGroupMember({ data: { id: g.id, userId: member.userId, reason } }).then((res) => { if (!res.ok) toast.error(err(res.error)); else { toast.success(locale === "fa" ? "عضو حذف شد" : "Member removed"); void qc.invalidateQueries({ queryKey: ["admin-group-members", g.id] }); void qc.invalidateQueries({ queryKey: ["admin-groups"] }); } }); }}>{locale === "fa" ? "حذف عضو" : "Remove member"}</button> : <span className="text-muted">{locale === "fa" ? "مالک" : "Owner"}</span>}</div>)}</div> : null}
+              </article>
             ))}
-          </div>
+          </section>
+        ) : null}
+        {tab === "stories" ? (
+          <section className="space-y-3">
+            <div className="flex flex-wrap gap-2">{(["all", "active", "expired"] as const).map((status) => <button key={status} type="button" onClick={() => setStoryStatus(status)} className={`h-9 rounded-full px-3 text-sm ${storyStatus === status ? "bg-green text-on" : "bg-panel"}`}>{status === "all" ? (locale === "fa" ? "همه" : "All") : status === "active" ? (locale === "fa" ? "فعال" : "Active") : (locale === "fa" ? "منقضی" : "Expired")}</button>)}</div>
+            {stories.isLoading ? <p className="rounded-xl bg-panel p-4 text-sm text-muted">{locale === "fa" ? "در حال بارگذاری استوری‌ها…" : "Loading stories…"}</p> : null}
+            {stories.isError ? <p role="alert" className="rounded-xl bg-panel p-4 text-sm">{locale === "fa" ? "خطا در دریافت استوری‌ها" : "Could not load stories"}<button type="button" onClick={() => void stories.refetch()} className="ms-2 underline">{locale === "fa" ? "تلاش مجدد" : "Retry"}</button></p> : null}
+            {(stories.data ?? []).length === 0 && !stories.isLoading ? <p className="rounded-xl bg-panel p-4 text-sm text-muted">{locale === "fa" ? "استوری‌ای پیدا نشد." : "No stories found."}</p> : null}
+            {(stories.data ?? []).map((story) => <article key={story.id} className="space-y-2 rounded-xl bg-panel p-3 text-sm"><div className="flex flex-wrap justify-between gap-2"><strong>{story.displayName}</strong><span className="text-xs text-muted">{story.expired ? (locale === "fa" ? "منقضی" : "Expired") : (locale === "fa" ? "فعال" : "Active")}</span></div><p className="text-muted">{story.kind} · {story.views} {locale === "fa" ? "بازدید" : "views"}</p>{story.caption ? <p className="break-words">{story.caption}</p> : null}<p className="text-xs text-muted">{formatChatTime(story.createdAt, locale, t)} · {locale === "fa" ? "انقضا:" : "Expires:"} {formatChatTime(story.expiresAt, locale, t)}</p><div className="break-all text-[11px] text-muted">{story.id} · {story.userId}</div><button type="button" className="text-danger" onClick={() => { const reason = window.prompt(locale === "fa" ? "دلیل حذف استوری (حداقل ۳ حرف)" : "Reason for deleting story (min 3 chars)"); if (!reason || reason.trim().length < 3) return; if (!window.confirm(locale === "fa" ? "این استوری حذف شود؟" : "Delete this story?")) return; void adminDeleteStory({ data: { id: story.id, reason } }).then((res) => { if (!res.ok) toast.error(err(res.error)); else { toast.success(locale === "fa" ? "استوری حذف شد" : "Story deleted"); void qc.invalidateQueries({ queryKey: ["admin-stories"] }); } }); }}>{locale === "fa" ? "حذف استوری" : "Delete story"}</button></article>)}
+          </section>
         ) : null}
         {tab === "reports" ? (
           <div className="space-y-2">
