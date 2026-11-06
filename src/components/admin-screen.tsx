@@ -15,6 +15,8 @@ import {
   adminCreateAnnouncement,
   adminDeleteAnnouncement,
   adminGetMyAdminAccess,
+  adminGetAndroidControl,
+  adminSaveAndroidControl,
   adminGetOperationalStatus,
   adminListAnnouncements,
   adminSetAnnouncementActive,
@@ -43,11 +45,12 @@ import {
   getMe,
 } from "@/server/api";
 
-type Tab = "dashboard" | "users" | "groups" | "stories" | "reports" | "appeals" | "audit" | "system" | "ops" | "insights" | "notifications";
+type Tab = "android" | "dashboard" | "users" | "groups" | "stories" | "reports" | "appeals" | "audit" | "system" | "ops" | "insights" | "notifications";
 type AuditPage = Awaited<ReturnType<typeof adminListAuditEvents>>;
 
-const ADMIN_TABS: Tab[] = ["dashboard", "users", "groups", "stories", "reports", "appeals", "audit", "insights", "system", "ops", "notifications"];
+const ADMIN_TABS: Tab[] = ["android", "dashboard", "users", "groups", "stories", "reports", "appeals", "audit", "insights", "system", "ops", "notifications"];
 const TAB_PERMISSION: Record<Tab, AdminPermission> = {
+  android: "android.control.read",
   dashboard: "dashboard.read", users: "users.read", groups: "groups.read", stories: "admin.full_access",
   reports: "moderation.read", appeals: "moderation.appeals.read", audit: "audit.read", insights: "audit.read",
   system: "system.manage", ops: "operations.read", notifications: "announcements.manage",
@@ -120,6 +123,11 @@ export function AdminScreen() {
     queryFn: () => adminGetSettings(),
     enabled: meQ.data?.role === "admin" && can("system.manage") && tab === "system",
   });
+  const androidControl = useQuery({
+    queryKey: ["admin-android-control"],
+    queryFn: () => adminGetAndroidControl(),
+    enabled: meQ.data?.role === "admin" && can("android.control.read") && tab === "android",
+  });
   const announcements = useQuery({
     queryKey: ["admin-announcements"],
     queryFn: () => adminListAnnouncements(),
@@ -167,6 +175,7 @@ export function AdminScreen() {
 
   const tabs = visibleTabs;
   const label: Record<Tab, string> = {
+    android: locale === "fa" ? "کنترل اندروید" : "Android control",
     dashboard: locale === "fa" ? "داشبورد" : "Dashboard",
     users: t("users"), groups: t("groups"), stories: locale === "fa" ? "مدیریت استوری‌ها" : "Stories", reports: locale === "fa" ? "مرکز نظارت" : "Moderation center",
     audit: locale === "fa" ? "گزارش رویدادها" : "Audit log", system: t("system"),
@@ -197,6 +206,26 @@ export function AdminScreen() {
         ) : null}
         {tab === "dashboard" ? (
           <AdminDashboard locale={locale} stats={dashboard.data} loading={dashboard.isLoading} statsError={dashboard.isError} onNavigate={(nextTab) => setTab(nextTab)} />
+        ) : null}
+        {tab === "android" ? (
+          <section className="space-y-3">
+            <div className="rounded-xl border border-line bg-panel p-4 text-sm">
+              <h2 className="font-semibold">{locale === "fa" ? "سیاست انتشار نسخه اندروید" : "Android release policy"}</h2>
+              <p className="mt-2 text-muted">{locale === "fa" ? "این تنظیمات از API عمومی نسخه اندروید قابل دریافت است. اعمال آن روی نسخه نصب‌شده، به پیاده‌سازی دریافت تنظیمات در اپ اندروید نیاز دارد." : "The Android app can read this policy from the public app-config endpoint. Enforcing it in installed apps requires the Android client to consume that endpoint."}</p>
+              <p className="mt-1 text-xs text-muted">{locale === "fa" ? "فهرست دستگاه‌ها و ارسال Push هنوز به ثبت دستگاه و اتصال FCM در کلاینت نیاز دارد و در این پنل شبیه‌سازی نشده است." : "Device inventory and push delivery are not simulated; they require client device registration and FCM integration."}</p>
+            </div>
+            {androidControl.isLoading ? <p className="rounded-xl bg-panel p-4 text-sm text-muted">{locale === "fa" ? "در حال دریافت تنظیمات…" : "Loading Android settings…"}</p> : null}
+            {androidControl.isError ? <p role="alert" className="rounded-xl bg-panel p-4 text-sm">{locale === "fa" ? "دریافت تنظیمات اندروید ناموفق بود." : "Could not load Android settings."} <button type="button" className="underline" onClick={() => void androidControl.refetch()}>{locale === "fa" ? "تلاش مجدد" : "Retry"}</button></p> : null}
+            {androidControl.data ? <AndroidControlForm key={androidControl.data.updatedAt ?? "android-default"} initial={androidControl.data} canWrite={can("android.control.manage")} onSave={async (value) => {
+              try {
+                const result = await adminSaveAndroidControl({ data: value });
+                if (!result.ok) { toast.error(err(result.error)); return; }
+                toast.success(locale === "fa" ? "سیاست اندروید ذخیره شد" : "Android policy saved");
+                void qc.invalidateQueries({ queryKey: ["admin-android-control"] });
+                void qc.invalidateQueries({ queryKey: ["admin-audit"] });
+              } catch { toast.error(locale === "fa" ? "ذخیره تنظیمات اندروید ناموفق بود" : "Could not save Android settings"); }
+            }} /> : null}
+          </section>
         ) : null}
         {tab === "insights" ? <AdminInsights locale={locale} /> : null}
         {tab === "audit" ? (
@@ -555,6 +584,42 @@ export function AdminScreen() {
       </div>
     </div>
   );
+}
+
+function AndroidControlForm({ initial, canWrite, onSave }: {
+  initial: { latestVersion: string; minimumVersion: string; updateUrl: string; forceUpdate: boolean; updateMessage: string; maintenanceMode: boolean; maintenanceMessage: string; updatedAt: string | null };
+  canWrite: boolean;
+  onSave: (value: { latestVersion: string; minimumVersion: string; updateUrl: string; forceUpdate: boolean; updateMessage: string; maintenanceMode: boolean; maintenanceMessage: string }) => Promise<void>;
+}) {
+  const { locale } = usePrefs();
+  const [latestVersion, setLatestVersion] = useState(initial.latestVersion);
+  const [minimumVersion, setMinimumVersion] = useState(initial.minimumVersion);
+  const [updateUrl, setUpdateUrl] = useState(initial.updateUrl);
+  const [forceUpdate, setForceUpdate] = useState(initial.forceUpdate);
+  const [updateMessage, setUpdateMessage] = useState(initial.updateMessage);
+  const [maintenanceMode, setMaintenanceMode] = useState(initial.maintenanceMode);
+  const [maintenanceMessage, setMaintenanceMessage] = useState(initial.maintenanceMessage);
+  const [saving, setSaving] = useState(false);
+  const fa = locale === "fa";
+  const field = "h-11 w-full rounded-lg bg-header px-3 text-sm outline-none";
+  return <form className="space-y-4 rounded-xl border border-line bg-panel p-4" onSubmit={(event) => {
+    event.preventDefault(); if (!canWrite || saving) return; setSaving(true);
+    void onSave({ latestVersion, minimumVersion, updateUrl, forceUpdate, updateMessage, maintenanceMode, maintenanceMessage }).finally(() => setSaving(false));
+  }}>
+    <div className="grid gap-3 sm:grid-cols-2">
+      <label className="grid gap-1 text-sm">{fa ? "آخرین نسخه منتشرشده" : "Latest released version"}<input className={field} value={latestVersion} onChange={(e) => setLatestVersion(e.target.value)} placeholder="1.2.0" pattern="[0-9]+\.[0-9]+\.[0-9]+" maxLength={20} required disabled={!canWrite} /></label>
+      <label className="grid gap-1 text-sm">{fa ? "حداقل نسخه مجاز" : "Minimum supported version"}<input className={field} value={minimumVersion} onChange={(e) => setMinimumVersion(e.target.value)} placeholder="1.0.0" pattern="[0-9]+\.[0-9]+\.[0-9]+" maxLength={20} required disabled={!canWrite} /></label>
+    </div>
+    <label className="grid gap-1 text-sm">{fa ? "لینک رسمی دریافت / به‌روزرسانی" : "Official download / update URL"}<input type="url" className={field} value={updateUrl} onChange={(e) => setUpdateUrl(e.target.value)} placeholder="https://…" maxLength={500} disabled={!canWrite} /></label>
+    <label className="grid gap-1 text-sm">{fa ? "پیام به‌روزرسانی" : "Update message"}<textarea className="min-h-20 w-full rounded-lg bg-header p-3 text-sm" value={updateMessage} onChange={(e) => setUpdateMessage(e.target.value)} maxLength={500} disabled={!canWrite} /></label>
+    <label className="flex items-center gap-3 text-sm"><input type="checkbox" checked={forceUpdate} onChange={(e) => setForceUpdate(e.target.checked)} disabled={!canWrite} />{fa ? "اجبار به به‌روزرسانی برای نسخه‌های قدیمی‌تر از آخرین نسخه" : "Force update for versions older than latest"}</label>
+    <div className="rounded-lg bg-header p-3 text-xs text-muted">{fa ? "نسخه‌ای پایین‌تر از حداقل نسخه مجاز، باید به‌روزرسانی شود. بازه نسخه باید معتبر باشد و لینک HTTPS لازم است." : "Versions below the minimum supported version must update. The version range must be valid and update links must use HTTPS."}</div>
+    <hr className="border-line" />
+    <label className="flex items-center gap-3 text-sm"><input type="checkbox" checked={maintenanceMode} onChange={(e) => setMaintenanceMode(e.target.checked)} disabled={!canWrite} />{fa ? "فعال‌سازی حالت تعمیرات اپ اندروید" : "Enable Android app maintenance mode"}</label>
+    <label className="grid gap-1 text-sm">{fa ? "پیام تعمیرات" : "Maintenance message"}<textarea className="min-h-20 w-full rounded-lg bg-header p-3 text-sm" value={maintenanceMessage} onChange={(e) => setMaintenanceMessage(e.target.value)} maxLength={500} disabled={!canWrite} /></label>
+    {initial.updatedAt ? <p className="text-xs text-muted">{fa ? "آخرین تغییر:" : "Last changed:"} {formatChatTime(initial.updatedAt, locale, (key) => key)}</p> : null}
+    {canWrite ? <button type="submit" disabled={saving} className="h-11 rounded-lg bg-green px-5 text-sm text-on disabled:opacity-50">{saving ? (fa ? "در حال ذخیره…" : "Saving…") : (fa ? "ذخیره و انتشار تنظیمات" : "Save and publish settings")}</button> : <p className="text-xs text-muted">{fa ? "این نقش فقط اجازه مشاهده تنظیمات را دارد." : "This role has read-only access."}</p>}
+  </form>;
 }
 
 function SettingsForm({

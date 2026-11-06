@@ -236,6 +236,16 @@ async function setting(sql: Sql, key: string, fallback: string): Promise<string>
   return rows[0]?.value ?? fallback;
 }
 
+function parseAndroidVersion(value: unknown): [number, number, number] | null {
+  const match = /^(0|[1-9]\d{0,4})\.(0|[1-9]\d{0,4})\.(0|[1-9]\d{0,4})$/.exec(clean(value, 20));
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+}
+
+function compareAndroidVersions(a: [number, number, number], b: [number, number, number]): number {
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] - b[i];
+  return 0;
+}
+
 async function maxBytes(sql: Sql): Promise<number> {
   const n = Number(await setting(sql, "max_upload_bytes", "2000000"));
   if (!Number.isFinite(n)) return 2_000_000;
@@ -349,6 +359,85 @@ export const adminGetMyAdminAccess = createServerFn({ method: "GET" })
     const role = await adminRoleOf(sql, context.userId);
     if (profile.role !== "admin" || !role) throw new Error("forbidden");
     return { role, permissions: [...permissionsForRole(role)] };
+  });
+
+// Public, read-only release policy consumed by the Android client at startup.
+// Never expose admin-only metadata or secrets through this endpoint.
+export const getAndroidAppConfig = createServerFn({ method: "GET" })
+  .handler(async () => {
+    const sql = await getSql();
+    return {
+      latestVersion: await setting(sql, "android_latest_version", "1.0.0"),
+      minimumVersion: await setting(sql, "android_minimum_version", "1.0.0"),
+      updateUrl: await setting(sql, "android_update_url", ""),
+      forceUpdate: (await setting(sql, "android_force_update", "false")) === "true",
+      updateMessage: await setting(sql, "android_update_message", ""),
+      maintenanceMode: (await setting(sql, "android_maintenance_mode", "false")) === "true",
+      maintenanceMessage: await setting(sql, "android_maintenance_message", ""),
+    };
+  });
+
+export const adminGetAndroidControl = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const sql = await getSql();
+    await requireAdminPermission(sql, context.userId, "android.control.read");
+    const rows = await sql<{ updated_at: unknown }>`select max(updated_at) as updated_at from system_settings where key like 'android_%'`;
+    return {
+      latestVersion: await setting(sql, "android_latest_version", "1.0.0"),
+      minimumVersion: await setting(sql, "android_minimum_version", "1.0.0"),
+      updateUrl: await setting(sql, "android_update_url", ""),
+      forceUpdate: (await setting(sql, "android_force_update", "false")) === "true",
+      updateMessage: await setting(sql, "android_update_message", ""),
+      maintenanceMode: (await setting(sql, "android_maintenance_mode", "false")) === "true",
+      maintenanceMessage: await setting(sql, "android_maintenance_message", ""),
+      updatedAt: iso(rows[0]?.updated_at),
+    };
+  });
+
+export const adminSaveAndroidControl = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const o = rec(input);
+    const latestVersion = clean(o.latestVersion, 20);
+    const minimumVersion = clean(o.minimumVersion, 20);
+    const latest = parseAndroidVersion(latestVersion);
+    const minimum = parseAndroidVersion(minimumVersion);
+    const updateUrl = clean(o.updateUrl, 500);
+    const updateMessage = clean(o.updateMessage, 500);
+    const maintenanceMessage = clean(o.maintenanceMessage, 500);
+    if (!latest || !minimum || compareAndroidVersions(minimum, latest) > 0) throw new Error("bad_version_range");
+    if (updateUrl) {
+      let parsed: URL;
+      try { parsed = new URL(updateUrl); } catch { throw new Error("bad_update_url"); }
+      if (parsed.protocol !== "https:" || !parsed.hostname || parsed.username || parsed.password) throw new Error("bad_update_url");
+    }
+    if (typeof o.forceUpdate !== "boolean" || typeof o.maintenanceMode !== "boolean") throw new Error("bad_input");
+    if (o.forceUpdate && !updateUrl) throw new Error("update_url_required");
+    return { latestVersion, minimumVersion, updateUrl, forceUpdate: o.forceUpdate, updateMessage, maintenanceMode: o.maintenanceMode, maintenanceMessage };
+  })
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    await requireAdminPermission(sql, context.userId, "android.control.manage");
+    const keys: [string, string][] = [
+      ["android_latest_version", data.latestVersion],
+      ["android_minimum_version", data.minimumVersion],
+      ["android_update_url", data.updateUrl],
+      ["android_force_update", String(data.forceUpdate)],
+      ["android_update_message", data.updateMessage],
+      ["android_maintenance_mode", String(data.maintenanceMode)],
+      ["android_maintenance_message", data.maintenanceMessage],
+    ];
+    const before: Record<string, string> = {};
+    for (const [key] of keys) before[key] = await setting(sql, key, "");
+    for (const [key, value] of keys) {
+      await sql`insert into system_settings(key, value, updated_at) values(${key}, ${value}, now()) on conflict(key) do update set value = excluded.value, updated_at = now()`;
+    }
+    await auditAdminEvent(sql, context.userId, "android.release_policy_updated", null, {
+      before,
+      after: Object.fromEntries(keys),
+    });
+    return ok(true);
   });
 
 function invitationHash(token: string): string {
